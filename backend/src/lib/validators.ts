@@ -22,11 +22,11 @@ export const GenerateBody = z
         llm_model: z.string().optional(),
         seed: z.number().optional(),
       })
-      .default({
+      .default(() => ({
         num_options: 4,
-        shuffle: true
-      }),
-    metadata: z.record(z.any()).optional(),
+        shuffle: true,
+      })),
+    metadata: z.record(z.string(), z.any()).optional(),
   })
   .refine(
     (v) =>
