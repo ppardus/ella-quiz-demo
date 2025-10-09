@@ -7,7 +7,7 @@ Einladung/ invitation
 Frage;question
 Gespräch -> conversation
 "Zeit","time"
-Buongiorno`;
+`;
 
 export default function GeneratePage() {
   const nav = useNavigate();
