@@ -113,6 +113,7 @@ app.post("/api/quizzes/generate", async (req, res) => {
       numOptions: options.num_options,
       model: options.llm_model,
       seed: options.seed,
+      shuffle: true
     });
 
     const quizzes = await Promise.all(
