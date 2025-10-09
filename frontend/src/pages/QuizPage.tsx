@@ -55,7 +55,7 @@ export default function QuizPage() {
           <div className="w-28"><ProgressBar value={pct} total={t} /></div>
           <div className="text-sm text-gray-600">{i} of {t}</div>
         </div>
-        <Badge>Set: {quiz.quiz_set_id.slice(0,8)}</Badge>
+        <Badge>Set: {quiz.quiz_set_id}</Badge>
       </div>
 
       <h2 className="text-xl font-semibold mb-2" dangerouslySetInnerHTML={{ __html: quiz.sentence_target }} />
