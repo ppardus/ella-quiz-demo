@@ -242,7 +242,7 @@ app.get("/api/quiz-sets/:id/summary", async (req, res) => {
     orderBy: { createdAt: "asc" },
   });
 
-  // latest answer per quiz
+  // Latest answer per quiz
   const latest = new Map<string, (typeof answers)[number]>();
   for (const a of answers) latest.set(a.quizId, a);
 
@@ -254,9 +254,13 @@ app.get("/api/quiz-sets/:id/summary", async (req, res) => {
     const a = latest.get(q.id);
     let result: "correct" | "incorrect" | "skipped" = "skipped";
     let answered_at: string | null = null;
+    let time_ms: number | null = null;
 
     if (a) {
-      if (a.action === "answered") result = a.isCorrect ? "correct" : "incorrect";
+      if (a.action === "answered") {
+        result = a.isCorrect ? "correct" : "incorrect";
+        time_ms = a.timeMs ?? null; // ⏱️ capture the time spent
+      }
       if (a.createdAt) answered_at = a.createdAt.toISOString();
     }
 
@@ -264,7 +268,13 @@ app.get("/api/quiz-sets/:id/summary", async (req, res) => {
     else if (result === "incorrect") incorrect++;
     else skipped++;
 
-    return { quiz_id: q.id, word: q.word, result, answered_at };
+    return {
+      quiz_id: q.id,
+      word: q.word,
+      result,
+      time_ms,
+      answered_at,
+    };
   });
 
   const total = items.length || 1;
