@@ -79,6 +79,12 @@ function parseRawText(raw?: string): Word[] {
 
   return rows;
 }
+
+function formatTime(ms?: number | null) {
+  if (ms == null) return "–";
+  return (ms / 1000).toFixed(1) + "s";
+}
+
 /** ------------------------------------------- **/
 
 app.post("/api/quizzes/generate", async (req, res) => {
@@ -268,11 +274,12 @@ app.get("/api/quiz-sets/:id/summary", async (req, res) => {
     else if (result === "incorrect") incorrect++;
     else skipped++;
 
+    const formatted_time = formatTime(time_ms)
     return {
       quiz_id: q.id,
       word: q.word,
       result,
-      time_ms,
+      formatted_time,
       answered_at,
     };
   });
