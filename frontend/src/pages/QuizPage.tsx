@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { getQuiz, listQuizzes, submitAnswer } from "../lib/api";
+import { Copy } from "lucide-react";
 import ProgressBar from "../components/ProgressBar";
 import Badge from "../components/Badge";
 
@@ -46,6 +47,18 @@ export default function QuizPage() {
     if (nextId) nav(`/quiz/${nextId}?set=${setId}&i=${i+1}&t=${t}`); else nav(`/summary/${setId}`);
   }
 
+  const [copied, setCopied] = useState(false);
+
+  const handleCopy = async () => {
+    try {
+      await navigator.clipboard.writeText(quiz.quiz_set_id);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    } catch (err) {
+      console.error("Copy failed:", err);
+    }
+  };
+
   if (loading || !quiz) return <div className="text-gray-600">Loading quiz…</div>;
 
   return (
@@ -55,7 +68,19 @@ export default function QuizPage() {
           <div className="w-28"><ProgressBar value={pct} total={t} /></div>
           <div className="text-sm text-gray-600">{i} of {t}</div>
         </div>
-        <Badge>Set: {quiz.quiz_set_id}</Badge>
+        <div className="flex items-center gap-1">
+          <Badge>
+            Set: <span className="font-mono">{quiz.quiz_set_id.slice(0, 8)}</span>
+          </Badge>
+          <button
+            onClick={handleCopy}
+            className="text-gray-500 hover:text-indigo-600 transition ml-1"
+            title="Copy full ID"
+          >
+            <Copy size={14} />
+          </button>
+          {copied && <span className="text-xs text-green-600 ml-1">Copied!</span>}
+        </div>
       </div>
 
       <h2 className="text-xl font-semibold mb-2" dangerouslySetInnerHTML={{ __html: quiz.sentence_target }} />
