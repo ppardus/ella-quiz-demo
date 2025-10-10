@@ -25,16 +25,6 @@ export default function App() {
           <span className="px-4 py-1.5 rounded-full text-sm font-semibold bg-primary/15 text-primary shadow-soft select-none">
             Ella
           </span>
-
-          {/* API link (small, muted) */}
-          <a
-            href={import.meta.env.VITE_API_BASE}
-            target="_blank"
-            rel="noreferrer"
-            className="absolute right-4 top-1/2 -translate-y-1/2 text-xs text-gray-500 hover:text-gray-700"
-          >
-            API
-          </a>
         </div>
       </header>
 
