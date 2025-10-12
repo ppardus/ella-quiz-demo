@@ -89,7 +89,7 @@ function formatTime(ms?: number | null) {
 }
 
 function buildSetLink(baseUrl: string, firstQuizId: string, setId: string, total: number) {
-  return `${baseUrl}/#/quiz/${firstQuizId}?set=${setId}&i=1&t=${total}`;
+  return `${baseUrl}/quiz/${firstQuizId}?set=${setId}&i=1&t=${total}`;
 }
 /** ------------------------------------------- **/
 
@@ -370,10 +370,6 @@ if (frontendDist) {
     res.sendFile(path.join(frontendDist, "index.html"));
   });
 } else {
-  console.warn(
-    "⚠️  Frontend build not found. Set FRONTEND_DIST env or copy frontend/dist into backend/frontend/dist."
-  );
-  
   app.all(/^\/api(\/.*)?$/, (_req, res) => {
     res.status(404).json({ error: "API route not found" });
   });

@@ -1,13 +1,18 @@
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
-import { HashRouter} from "react-router-dom";
+import { createBrowserRouter, RouterProvider } from "react-router-dom";
 import "./index.css";
 import App from "./App";
+import GeneratePage from "./pages/GeneratePage";
+import QuizPage from "./pages/QuizPage";
+import SummaryPage from "./pages/SummaryPage";
 
-createRoot(document.getElementById("root")!).render(
-  <StrictMode>
-    <HashRouter>
-      <App />
-    </HashRouter>
-  </StrictMode>
-);
+const router = createBrowserRouter([
+  { path: "/", element: <App />, children: [
+    { index: true, element: <GeneratePage /> },
+    { path: "quiz/:quizId", element: <QuizPage /> },
+    { path: "summary/:setId", element: <SummaryPage /> }
+  ]},
+]);
+
+createRoot(document.getElementById("root")!).render(<StrictMode><RouterProvider router={router} /></StrictMode>);
