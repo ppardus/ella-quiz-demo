@@ -3,8 +3,11 @@ import express from "express";
 import cors from "cors";
 import helmet from "helmet";
 import { z } from "zod";
+import path from "path";
+import fs from "fs";
+import { fileURLToPath } from "url";
+
 import { prisma } from "./lib/prisma.js";
-// ^ if you're not using "type":"module", remove the .js extension
 import { GenerateBody } from "./lib/validators.js";
 import { generateQuizzesWithLLM } from "./services/generator.js";
 // import type { Prisma } from "@prisma/client"; // only needed if you want to cast JSON precisely
@@ -12,7 +15,7 @@ import { generateQuizzesWithLLM } from "./services/generator.js";
 const app = express();
 app.use(helmet());
 
-// CORS: allow specific origins if provided, or allow all in demo
+// ---------- CORS ----------
 const allowlist = (process.env.CORS_ALLOW_ORIGIN ?? "")
   .split(",")
   .map((s) => s.trim())
@@ -88,8 +91,9 @@ function formatTime(ms?: number | null) {
 function buildSetLink(baseUrl: string, firstQuizId: string, setId: string, total: number) {
   return `${baseUrl}/quiz/${firstQuizId}?set=${setId}&i=1&t=${total}`;
 }
-
 /** ------------------------------------------- **/
+
+/** ---------- API ROUTES ---------- **/
 
 app.post("/api/quizzes/generate", async (req, res) => {
   try {
@@ -123,7 +127,7 @@ app.post("/api/quizzes/generate", async (req, res) => {
       numOptions: options.num_options,
       model: options.llm_model,
       seed: options.seed,
-      shuffle: true
+      shuffle: true,
     });
 
     const quizzes = await Promise.all(
@@ -134,7 +138,6 @@ app.post("/api/quizzes/generate", async (req, res) => {
             word: q.word,
             sentenceTarget: q.sentenceTarget,
             sentenceKnownMasked: q.sentenceKnownMasked,
-            // If your Prisma field is Json, it expects a JSON value; q.optionsKnown is usually string[]
             optionsKnown: q.optionsKnown as any, // or cast to Prisma.InputJsonValue
             correctIndex: q.correctIndex,
             indexInSet: i + 1,
@@ -303,7 +306,7 @@ app.get("/api/quiz-sets/:id/summary", async (req, res) => {
     else if (result === "incorrect") incorrect++;
     else skipped++;
 
-    const formatted_time = formatTime(time_ms)
+    const formatted_time = formatTime(time_ms);
     return {
       quiz_id: q.id,
       word: q.word,
@@ -329,6 +332,52 @@ app.get("/api/quiz-sets/:id/summary", async (req, res) => {
     })),
   });
 });
+
+/** ---------- SPA STATIC SERVE (universal, works on any host) ---------- **/
+
+// Resolve paths safely in ESM
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+// Allow override via env (absolute path to built frontend)
+const FRONTEND_DIST_ENV = process.env.FRONTEND_DIST;
+
+// Typical layout when the frontend build is copied into backend/frontend/dist
+const candidatePaths = [
+  FRONTEND_DIST_ENV,                                      // explicit override
+  path.resolve(__dirname, "../frontend/dist"),            // backend/dist -> ../frontend/dist
+  path.resolve(__dirname, "../../frontend/dist"),         // fallback if built differently
+  path.resolve(process.cwd(), "frontend/dist"),           // monorepo root when running ts-node
+].filter(Boolean) as string[];
+
+let frontendDist = "";
+for (const p of candidatePaths) {
+  try {
+    if (fs.existsSync(p) && fs.existsSync(path.join(p, "index.html"))) {
+      frontendDist = p;
+      break;
+    }
+  } catch {}
+}
+
+if (frontendDist) {
+  // Serve static assets
+  app.use(express.static(frontendDist, { index: false, maxAge: "1h" }));
+
+  // SPA fallback: any non-API route returns index.html
+  app.get("*", (req, res, next) => {
+    if (req.path.startsWith("/api")) return next(); // let API 404s fall through
+    res.sendFile(path.join(frontendDist, "index.html"));
+  });
+} else {
+  console.warn(
+    "⚠️  Frontend build not found. Set FRONTEND_DIST env or copy frontend/dist into backend/frontend/dist."
+  );
+  // Optional: API 404 handler
+  app.use("/api/*", (_req, res) => res.status(404).json({ error: "API route not found" }));
+}
+
+/** -------------------------------------------------------------------- **/
 
 const PORT = Number(process.env.PORT || 3000);
 app.listen(PORT, () => console.log(`API listening on :${PORT}`));
