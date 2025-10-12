@@ -373,8 +373,10 @@ if (frontendDist) {
   console.warn(
     "⚠️  Frontend build not found. Set FRONTEND_DIST env or copy frontend/dist into backend/frontend/dist."
   );
-  // Optional: API 404 handler
-  app.use("/api/*", (_req, res) => res.status(404).json({ error: "API route not found" }));
+  
+  app.all(/^\/api(\/.*)?$/, (_req, res) => {
+    res.status(404).json({ error: "API route not found" });
+  });
 }
 
 /** -------------------------------------------------------------------- **/
