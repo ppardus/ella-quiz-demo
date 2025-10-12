@@ -89,7 +89,7 @@ function formatTime(ms?: number | null) {
 }
 
 function buildSetLink(baseUrl: string, firstQuizId: string, setId: string, total: number) {
-  return `${baseUrl}/quiz/${firstQuizId}?set=${setId}&i=1&t=${total}`;
+  return `${baseUrl}/#/quiz/${firstQuizId}?set=${setId}&i=1&t=${total}`;
 }
 /** ------------------------------------------- **/
 
