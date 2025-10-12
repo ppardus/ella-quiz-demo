@@ -85,6 +85,10 @@ function formatTime(ms?: number | null) {
   return (ms / 1000).toFixed(1) + "s";
 }
 
+function buildSetLink(baseUrl: string, firstQuizId: string, setId: string, total: number) {
+  return `${baseUrl}/quiz/${firstQuizId}?set=${setId}&i=1&t=${total}`;
+}
+
 /** ------------------------------------------- **/
 
 app.post("/api/quizzes/generate", async (req, res) => {
@@ -140,9 +144,16 @@ app.post("/api/quizzes/generate", async (req, res) => {
       )
     );
 
+    const baseUrl = process.env.APP_BASE_URL || "http://localhost:5173";
+    const firstQuiz = quizzes[0];
+    const link = firstQuiz
+      ? buildSetLink(baseUrl, firstQuiz.id, quizSet.id, quizzes.length)
+      : null;
+
     res.json({
       quiz_set_id: quizSet.id,
       count: quizzes.length,
+      link,
       items: quizzes.map((q) => ({
         quiz_id: q.id,
         slug: q.slug,
@@ -156,6 +167,24 @@ app.post("/api/quizzes/generate", async (req, res) => {
     console.error(err);
     res.status(501).json({ error: err?.message ?? "Generation failed" });
   }
+});
+
+app.get("/api/quiz-sets/:id/link", async (req, res) => {
+  const set = await prisma.quizSet.findUnique({ where: { id: req.params.id } });
+  if (!set) return res.status(404).json({ error: "Not found" });
+
+  const first = await prisma.quiz.findFirst({
+    where: { quizSetId: set.id },
+    orderBy: { indexInSet: "asc" },
+    select: { id: true },
+  });
+  if (!first) return res.status(404).json({ error: "No quizzes in set" });
+
+  const total = await prisma.quiz.count({ where: { quizSetId: set.id } });
+  const baseUrl = process.env.APP_BASE_URL || "http://localhost:5173";
+  const link = buildSetLink(baseUrl, first.id, set.id, total);
+
+  res.json({ quiz_set_id: set.id, total, link });
 });
 
 app.get("/api/quizzes/:quiz_id", async (req, res) => {
