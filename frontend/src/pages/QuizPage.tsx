@@ -8,9 +8,7 @@ import {
   continueAttempt,
   answerQuiz,
 } from "../lib/api";
-import { Copy } from "lucide-react";
 import ProgressBar from "../components/ProgressBar";
-import Badge from "../components/Badge";
 
 // --- helpers --------------------------------------------------------------
 
@@ -302,14 +300,6 @@ export default function QuizPage() {
   if (loading && !quiz && setId) return <div className="text-gray-600">Loading quiz…</div>;
   if (errMsg && !quiz) return <div className="text-red-600">{errMsg}</div>;
   if (!quiz && setId) return null;
-
-  const handleCopy = async () => {
-    try {
-      await navigator.clipboard.writeText(quiz.quiz_set_id);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 1500);
-    } catch {}
-  };
 
   return (
     <div className="bg-white shadow-xl rounded-2xl p-6">
