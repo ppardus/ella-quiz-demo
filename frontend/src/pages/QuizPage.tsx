@@ -82,7 +82,6 @@ export default function QuizPage() {
   });
 
   const startMs = useRef<number>(Date.now());
-  const [copied, setCopied] = useState(false);
 
   useEffect(() => {
     let mounted = true;
@@ -313,7 +312,7 @@ export default function QuizPage() {
           {/* <button onClick={handleCopy} className="text-gray-500 hover:text-indigo-600 transition ml-1" title="Copy full ID">
             <Copy size={14} />
           </button> */}
-          {copied && <span className="text-xs text-green-600 ml-1">Copied!</span>}
+          {/* {copied && <span className="text-xs text-green-600 ml-1">Copied!</span>} */}
 
           {/* Difficulty tag (informational only) */}
           {quiz.difficulty_label && (
