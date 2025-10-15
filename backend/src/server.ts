@@ -10,7 +10,6 @@ import { fileURLToPath } from "url";
 import { prisma } from "./lib/prisma.js";
 import { GenerateBody } from "./lib/validators.js";
 import { generateQuizzesWithLLM } from "./services/generator.js";
-// import type { Prisma } from "@prisma/client"; // only needed if you want to cast JSON precisely
 
 const app = express();
 app.use(helmet());
@@ -20,7 +19,6 @@ const allowlist = (process.env.CORS_ALLOW_ORIGIN ?? "")
   .split(",")
   .map((s) => s.trim())
   .filter(Boolean);
-// When allowlist is empty, `true` allows all (useful for demo)
 app.use(cors({ origin: allowlist.length ? allowlist : true }));
 
 app.use(express.json({ limit: "1mb" }));
@@ -31,10 +29,9 @@ app.get("/health", (_req, res) => res.json({ ok: true }));
 function stripQuotes(s: string) {
   return s.replace(/^["'“”‘’]|["'“”‘’]$/g, "");
 }
-// separators: :, /, ;, arrows, dashes like "term -> translation"
 const PAIR_SEP = /\s*(?::|\/|;|→|⇒|—|–|->|=>|\s-\s)\s*/;
 
-type Word = { term: string; translation?: string }; // optional is allowed
+type Word = { term: string; translation?: string };
 
 function parseRawText(raw?: string): Word[] {
   if (!raw) return [];
@@ -45,34 +42,31 @@ function parseRawText(raw?: string): Word[] {
     const line = origLine.trim();
     if (!line) continue;
 
-    // CSV/TSV two columns when no obvious custom separator
     if (!PAIR_SEP.test(line) && /,|\t/.test(line)) {
       const csv = line.split(/\t|,/).map((s) => stripQuotes(s.trim()));
       if (csv.length >= 2) {
         const term = csv[0];
         const translation = csv[1];
         if (term && !seen.has(term)) {
-          rows.push({ term, translation: translation ?? undefined }); // keep optional
+          rows.push({ term, translation: translation ?? undefined });
           seen.add(term);
         }
         continue;
       }
     }
 
-    // General separators
     const parts = line.split(PAIR_SEP);
     if (parts.length >= 2) {
       const term = stripQuotes(parts[0].trim());
       const translationJoined = parts.slice(1).join(":").trim();
       const translation = stripQuotes(translationJoined);
       if (term && !seen.has(term)) {
-        rows.push({ term, translation: translation || undefined }); // keep optional
+        rows.push({ term, translation: translation || undefined });
         seen.add(term);
       }
       continue;
     }
 
-    // Single term
     const term = stripQuotes(line);
     if (term && !seen.has(term)) {
       rows.push({ term });
@@ -93,6 +87,31 @@ function buildSetLink(baseUrl: string, firstQuizId: string, setId: string, total
 }
 /** ------------------------------------------- **/
 
+/** ---------- ATTEMPT HELPERS (resume/next-unanswered) ---------- **/
+
+function requireAttemptToken(req: express.Request): string {
+  const t = String(req.query.attempt || "").trim();
+  if (!t) throw new Error("Missing attempt token");
+  return t;
+}
+
+async function nextUnansweredForAttempt(quizSetId: string, attemptToken: string) {
+  const quizzes = await prisma.quiz.findMany({
+    where: { quizSetId },
+    orderBy: { indexInSet: "asc" },
+    select: { id: true, indexInSet: true, sentenceTarget: true, sentenceKnownMasked: true, optionsKnown: true }
+  });
+
+  if (!quizzes.length) return null;
+
+  const answered = await prisma.quizAnswer.findMany({
+    where: { attemptToken, quizId: { in: quizzes.map(q => q.id) } },
+    select: { quizId: true }
+  });
+  const answeredSet = new Set(answered.map(a => a.quizId));
+  return quizzes.find(q => !answeredSet.has(q.id)) ?? null;
+}
+
 /** ---------- API ROUTES ---------- **/
 
 app.post("/api/quizzes/generate", async (req, res) => {
@@ -104,7 +123,6 @@ app.post("/api/quizzes/generate", async (req, res) => {
 
     const { target_language, known_language, level, options, metadata } = parsed.data;
 
-    // Use words[] if provided; otherwise parse raw_text flexibly
     const words: Word[] =
       parsed.data.words && parsed.data.words.length
         ? parsed.data.words.map((w) => ({ term: w.term, translation: w.translation ?? undefined }))
@@ -115,7 +133,7 @@ app.post("/api/quizzes/generate", async (req, res) => {
         targetLanguage: target_language,
         knownLanguage: known_language,
         level,
-        metadata: metadata ?? null, // if your schema allows Json | null, keep it null-safe
+        metadata: metadata ?? null,
       },
     });
 
@@ -138,7 +156,7 @@ app.post("/api/quizzes/generate", async (req, res) => {
             word: q.word,
             sentenceTarget: q.sentenceTarget,
             sentenceKnownMasked: q.sentenceKnownMasked,
-            optionsKnown: q.optionsKnown as any, // or cast to Prisma.InputJsonValue
+            optionsKnown: q.optionsKnown as any,
             correctIndex: q.correctIndex,
             indexInSet: i + 1,
             slug: `${quizSet.id}/${i + 1}`,
@@ -219,12 +237,40 @@ app.get("/api/quiz-sets/:id/quizzes", async (req, res) => {
   });
 });
 
+/** ---- NEW: next unanswered for an attempt (resume link behavior) ---- */
+app.get("/api/quiz-sets/:id/next", async (req, res) => {
+  try {
+    const set = await prisma.quizSet.findUnique({ where: { id: req.params.id } });
+    if (!set) return res.status(404).json({ error: "Quiz set not found" });
+
+    const attempt = requireAttemptToken(req);
+    const nextQ = await nextUnansweredForAttempt(set.id, attempt);
+
+    if (!nextQ) return res.json({ status: "completed" });
+
+    res.json({
+      status: "in_progress",
+      question: {
+        quiz_id: nextQ.id,
+        index: nextQ.indexInSet,
+        sentence_target: nextQ.sentenceTarget,
+        sentence_known_masked: nextQ.sentenceKnownMasked,
+        options_known: nextQ.optionsKnown,
+      },
+    });
+  } catch (e: any) {
+    res.status(400).json({ error: e?.message ?? "Bad request" });
+  }
+});
+
+/** ---- UPDATED: answer route requires attempt, idempotent per question+attempt ---- */
 app.post("/api/quizzes/:quiz_id/answer", async (req, res) => {
   const body = z
     .object({
       choice_index: z.number().int().optional(),
       time_ms: z.number().int().min(0).optional(),
       action: z.enum(["answered", "skipped"]),
+      attempt: z.string().min(1),
     })
     .safeParse(req.body);
   if (!body.success) return res.status(400).json({ error: body.error.flatten() });
@@ -232,21 +278,53 @@ app.post("/api/quizzes/:quiz_id/answer", async (req, res) => {
   const quiz = await prisma.quiz.findUnique({ where: { id: req.params.quiz_id } });
   if (!quiz) return res.status(404).json({ error: "Not found" });
 
-  const { choice_index, action, time_ms } = body.data;
+  const { choice_index, action, time_ms, attempt } = body.data;
   const isCorrect =
     action === "answered" ? (choice_index ?? -1) === quiz.correctIndex : null;
 
-  await prisma.quizAnswer.create({
-    data: {
-      quizId: quiz.id,
-      choiceIndex: choice_index ?? null,
-      isCorrect,
-      action,
-      timeMs: time_ms ?? null,
-    },
-  });
+  try {
+    await prisma.quizAnswer.create({
+      data: {
+        quizId: quiz.id,
+        choiceIndex: choice_index ?? null,
+        isCorrect,
+        action,
+        timeMs: time_ms ?? null,
+        attemptToken: attempt,
+      },
+    });
+  } catch (e: any) {
+    // Unique violation -> already answered/skipped for this attempt
+    if (String(e?.code) === "P2002") {
+      const existing = await prisma.quizAnswer.findFirst({
+        where: { quizId: quiz.id, attemptToken: attempt },
+      });
+      return res.json({
+        already_recorded: true,
+        correct: existing?.isCorrect ?? false,
+        correct_index: quiz.correctIndex,
+      });
+    }
+    throw e;
+  }
 
   res.json({ correct: isCorrect ?? false, correct_index: quiz.correctIndex });
+});
+
+/** ---- NEW: continue to the next unanswered after a submit/skip ---- */
+app.get("/api/quiz-sets/:id/continue", async (req, res) => {
+  try {
+    const set = await prisma.quizSet.findUnique({ where: { id: req.params.id } });
+    if (!set) return res.status(404).json({ error: "Quiz set not found" });
+
+    const attempt = requireAttemptToken(req);
+    const nextQ = await nextUnansweredForAttempt(set.id, attempt);
+    if (!nextQ) return res.json({ status: "completed" });
+
+    res.json({ status: "in_progress", next_quiz_id: nextQ.id, index: nextQ.indexInSet });
+  } catch (e: any) {
+    res.status(400).json({ error: e?.message ?? "Bad request" });
+  }
 });
 
 /** ---------- record “Next” click with timestamp ---------- **/
@@ -259,11 +337,13 @@ app.post("/api/quizzes/:quiz_id/next-click", async (req, res) => {
   });
   res.json({ ok: true, recorded_at: new Date().toISOString() });
 });
-/** ---------------------------------------------------------------- **/
 
+/** ---- UPDATED: summary distinguishes skipped vs unanswered (per attempt) ---- */
 app.get("/api/quiz-sets/:id/summary", async (req, res) => {
   const set = await prisma.quizSet.findUnique({ where: { id: req.params.id } });
   if (!set) return res.status(404).json({ error: "Not found" });
+
+  const attempt = String(req.query.attempt || "").trim() || null;
 
   const quizzes = await prisma.quiz.findMany({
     where: { quizSetId: set.id },
@@ -271,7 +351,10 @@ app.get("/api/quiz-sets/:id/summary", async (req, res) => {
   });
 
   const answers = await prisma.quizAnswer.findMany({
-    where: { quizId: { in: quizzes.map((q) => q.id) } },
+    where: {
+      quizId: { in: quizzes.map((q) => q.id) },
+      ...(attempt ? { attemptToken: attempt } : {}),
+    },
     orderBy: { createdAt: "asc" },
   });
 
@@ -280,49 +363,52 @@ app.get("/api/quiz-sets/:id/summary", async (req, res) => {
     orderBy: { createdAt: "asc" },
   });
 
-  // Latest answer per quiz
   const latest = new Map<string, (typeof answers)[number]>();
   for (const a of answers) latest.set(a.quizId, a);
 
   let correct = 0,
     incorrect = 0,
-    skipped = 0;
+    skipped = 0,
+    unanswered = 0;
 
   const items = quizzes.map((q) => {
     const a = latest.get(q.id);
-    let result: "correct" | "incorrect" | "skipped" = "skipped";
+    let result: "correct" | "incorrect" | "skipped" | "unanswered" = "unanswered";
     let answered_at: string | null = null;
     let time_ms: number | null = null;
 
     if (a) {
       if (a.action === "answered") {
         result = a.isCorrect ? "correct" : "incorrect";
-        time_ms = a.timeMs ?? null; // ⏱️ capture the time spent
+        time_ms = a.timeMs ?? null;
+      } else if (a.action === "skipped") {
+        result = "skipped";
       }
       if (a.createdAt) answered_at = a.createdAt.toISOString();
     }
 
     if (result === "correct") correct++;
     else if (result === "incorrect") incorrect++;
-    else skipped++;
+    else if (result === "skipped") skipped++;
+    else unanswered++;
 
     const formatted_time = formatTime(time_ms);
     return {
       quiz_id: q.id,
       word: q.word,
       result,
-      formatted_time,
+      formatted_time: formatted_time,
       answered_at,
     };
   });
 
-  const total = items.length || 1;
-  const overall_accuracy = correct / total;
+  const overall_accuracy = correct / Math.max(1, correct + incorrect);
 
   res.json({
     quiz_set_id: set.id,
+    attempt: attempt ?? undefined,
+    counts: { correct, incorrect, skipped, unanswered },
     overall_accuracy,
-    counts: { correct, incorrect, skipped },
     items,
     events: events.map((e) => ({
       type: e.type,
@@ -333,21 +419,18 @@ app.get("/api/quiz-sets/:id/summary", async (req, res) => {
   });
 });
 
-/** ---------- SPA STATIC SERVE (universal, works on any host) ---------- **/
+/** ---------- SPA STATIC SERVE (universal) ---------- **/
 
-// Resolve paths safely in ESM
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-// Allow override via env (absolute path to built frontend)
 const FRONTEND_DIST_ENV = process.env.FRONTEND_DIST;
 
-// Typical layout when the frontend build is copied into backend/frontend/dist
 const candidatePaths = [
-  FRONTEND_DIST_ENV,                                      // explicit override
-  path.resolve(__dirname, "../frontend/dist"),            // backend/dist -> ../frontend/dist
-  path.resolve(__dirname, "../../frontend/dist"),         // fallback if built differently
-  path.resolve(process.cwd(), "frontend/dist"),           // monorepo root when running ts-node
+  FRONTEND_DIST_ENV,
+  path.resolve(__dirname, "../frontend/dist"),
+  path.resolve(__dirname, "../../frontend/dist"),
+  path.resolve(process.cwd(), "frontend/dist"),
 ].filter(Boolean) as string[];
 
 let frontendDist = "";
@@ -361,12 +444,9 @@ for (const p of candidatePaths) {
 }
 
 if (frontendDist) {
-  // Serve static assets
   app.use(express.static(frontendDist, { index: false, maxAge: "1h" }));
-
-  // SPA fallback: any non-API route returns index.html
   app.get("*", (req, res, next) => {
-    if (req.path.startsWith("/api")) return next(); // let API 404s fall through
+    if (req.path.startsWith("/api")) return next();
     res.sendFile(path.join(frontendDist, "index.html"));
   });
 } else {
@@ -374,8 +454,6 @@ if (frontendDist) {
     res.status(404).json({ error: "API route not found" });
   });
 }
-
-/** -------------------------------------------------------------------- **/
 
 const PORT = Number(process.env.PORT || 3000);
 app.listen(PORT, () => console.log(`API listening on :${PORT}`));

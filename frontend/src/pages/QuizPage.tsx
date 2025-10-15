@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
+import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { getQuiz, listQuizzes, submitAnswer } from "../lib/api";
 import { Copy } from "lucide-react";
 import ProgressBar from "../components/ProgressBar";
@@ -12,6 +12,7 @@ export default function QuizPage() {
   const setId = sp.get("set") ?? "";
   const i = Number(sp.get("i") ?? "1");
   const t = Number(sp.get("t") ?? "1");
+  const attempt = sp.get("attempt") || "";
 
   const [quiz, setQuiz] = useState<any>(null);
   const [loading, setLoading] = useState(true);
@@ -24,12 +25,35 @@ export default function QuizPage() {
   useEffect(() => {
     let mounted = true;
     setLoading(true);
-    getQuiz(quizId!).then(d => { if (mounted) setQuiz(d); }).finally(()=>setLoading(false));
-    if (setId) listQuizzes(setId).then(d => setIds(d.items.map((x:any)=>({quiz_id:x.quiz_id,index:x.index}))));
+
+    async function enforceResume() {
+      if (setId && attempt) {
+        const res = await fetch(`/api/quiz-sets/${setId}/next?attempt=${encodeURIComponent(attempt)}`);
+        const data = await res.json();
+        if (data?.status === "completed") {
+          nav(`/summary/${setId}?attempt=${encodeURIComponent(attempt)}`, { replace: true });
+          return;
+        }
+        const nextId = data?.question?.quiz_id;
+        const nextIndex = data?.question?.index;
+        if (nextId && nextId !== quizId) {
+          nav(
+            `/quiz/${nextId}?set=${setId}&i=${nextIndex}&t=${t}&attempt=${encodeURIComponent(attempt)}`,
+            { replace: true }
+          );
+          return;
+        }
+      }
+      // Load current quiz if no redirect needed
+      getQuiz(quizId!).then(d => { if (mounted) setQuiz(d); }).finally(()=>setLoading(false));
+      if (setId) listQuizzes(setId).then(d => setIds(d.items.map((x:any)=>({quiz_id:x.quiz_id,index:x.index}))));
+    }
+    enforceResume();
+
     startMs.current = Date.now();
     setChoicesDisabled(false); setPicked(null); setCorrectIndex(null);
     return () => { mounted = false; };
-  }, [quizId, setId]);
+  }, [quizId, setId, attempt, t, nav]);
 
   const pct = useMemo(() => Math.max(1, i), [i]);
 
@@ -37,18 +61,55 @@ export default function QuizPage() {
     if (choicesDisabled || correctIndex !== null) return;
     setPicked(idx); setChoicesDisabled(true);
     const elapsed = Date.now() - startMs.current;
-    const res = await submitAnswer(quizId!, { choice_index: idx, time_ms: elapsed, action: "answered" });
+
+    const payload = { choice_index: idx, time_ms: elapsed, action: "answered", attempt };
+    const res = attempt
+      ? await (await fetch(`/api/quizzes/${quizId}/answer`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+        })).json()
+      : await submitAnswer(quizId!, payload as any);
+
     setCorrectIndex(res.correct_index);
   }
 
-  function next() {
-    if (!setId || !ids.length) { nav(`/summary/${setId}`); return; }
+  async function skip() {
+    if (choicesDisabled || correctIndex !== null) return;
+    setChoicesDisabled(true);
+    const elapsed = Date.now() - startMs.current;
+    const payload = { action: "skipped", time_ms: elapsed, attempt };
+    await fetch(`/api/quizzes/${quizId}/answer`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    // Show Next/Finish immediately after a skip
+    setCorrectIndex(-1);
+  }
+
+  async function next() {
+    if (!setId) {
+      nav(`/summary/${setId}${attempt ? `?attempt=${encodeURIComponent(attempt)}` : ""}`);
+      return;
+    }
+    if (attempt) {
+      const r = await fetch(`/api/quiz-sets/${setId}/continue?attempt=${encodeURIComponent(attempt)}`);
+      const data = await r.json();
+      if (data.status === "completed") {
+        nav(`/summary/${setId}?attempt=${encodeURIComponent(attempt)}`);
+      } else {
+        nav(`/quiz/${data.next_quiz_id}?set=${setId}&i=${data.index}&t=${t}&attempt=${encodeURIComponent(attempt)}`);
+      }
+      return;
+    }
+    // legacy fallback (no attempt): use preloaded ids
+    if (!ids.length) { nav(`/summary/${setId}`); return; }
     const nextId = ids.find(x=>x.index === i+1)?.quiz_id;
     if (nextId) nav(`/quiz/${nextId}?set=${setId}&i=${i+1}&t=${t}`); else nav(`/summary/${setId}`);
   }
 
   const [copied, setCopied] = useState(false);
-
   const handleCopy = async () => {
     try {
       await navigator.clipboard.writeText(quiz.quiz_set_id);
@@ -109,8 +170,16 @@ export default function QuizPage() {
         })}
       </div>
 
-      <div className="mt-6 flex items-center justify-between">
-        <Link to="/" className="text-sm text-gray-500 underline">Back</Link>
+      <div className="mt-6 flex items-center justify-end gap-3">
+        {/* No Back button per requirements */}
+        {correctIndex === null && (
+          <button
+            onClick={skip}
+            className="px-4 py-2 rounded-lg border text-gray-700 hover:bg-gray-50"
+          >
+            Skip
+          </button>
+        )}
         {correctIndex !== null && (
           <button onClick={next} className="px-5 py-2 rounded-lg bg-indigo-600 text-white hover:bg-indigo-700">
             {i < t ? "Next" : "Finish"}

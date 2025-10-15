@@ -37,14 +37,17 @@ model Quiz {
 }
 
 model QuizAnswer {
-  id          String   @id @default(cuid())
-  quizId      String
-  quiz        Quiz     @relation(fields: [quizId], references: [id], onDelete: Cascade)
-  choiceIndex Int?
-  isCorrect   Boolean?
-  action      String // "answered" | "skipped"
-  timeMs      Int?
-  createdAt   DateTime @default(now())
+  id           String   @id @default(cuid())
+  quizId       String
+  quiz         Quiz     @relation(fields: [quizId], references: [id], onDelete: Cascade)
+  choiceIndex  Int?
+  isCorrect    Boolean?
+  action       String   // "answered" | "skipped"
+  timeMs       Int?
+  createdAt    DateTime @default(now())
+  attemptToken String
+
+  @@unique([quizId, attemptToken]) // one record per question per attempt
 }
 
 model QuizEvent {
