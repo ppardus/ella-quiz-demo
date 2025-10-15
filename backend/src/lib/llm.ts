@@ -243,11 +243,12 @@ function mixSeed(seed: number | undefined, idx: number): number {
   return (base ^ ((idx + 1) * 0x9e3779b1)) >>> 0;
 }
 
-async function evaluateDifficultyOpenAI(items: QuizItem[], input: GenerateInput): Promise<Partial<QuizItem>[]> {
+type DiffPatch = Partial<Pick<QuizItem, "difficultyScore" | "difficultyLabel" | "difficultyReason">>;
+
+async function evaluateDifficultyOpenAI(items: QuizItem[], input: GenerateInput): Promise<DiffPatch[]> {
   const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY! });
   const sys = "You are an educational content evaluator. Return valid JSON only.";
 
-  // Build compact payload with everything the rubric needs
   const payload = {
     target_language: input.targetLanguage,
     known_language: input.knownLanguage,
@@ -256,7 +257,7 @@ async function evaluateDifficultyOpenAI(items: QuizItem[], input: GenerateInput)
       index: i + 1,
       sentence_target: q.sentenceTarget,
       options_known: q.optionsKnown,
-      correct_index: q.correctIndex
+      correct_index: q.correctIndex,
     })),
     rubric: {
       context_clarity: "0-3",
@@ -265,14 +266,12 @@ async function evaluateDifficultyOpenAI(items: QuizItem[], input: GenerateInput)
       grammar_clue: "0-1",
       cognate_similarity: "0-1",
       total: "0-10",
-      labels: { easy: "8-10", moderate: "5-7", hard: "0-4" }
-    }
+      labels: { easy: "8-10", moderate: "5-7", hard: "0-4" },
+    },
   };
 
   const user = `
-You are an educational content evaluator.
-
-Task: For each quiz, assign difficulty_score (0..10) and difficulty_label (Easy|Moderate|Hard) using this mapping:
+Task: For each quiz, assign difficulty_score (0..10) and difficulty_label (Easy|Moderate|Hard) using:
 8–10 → Easy, 5–7 → Moderate, 0–4 → Hard.
 Also include a short "reason" string.
 
@@ -287,21 +286,36 @@ ${JSON.stringify(payload)}
     model: input.model || "gpt-4o-mini",
     temperature: 0,
     response_format: { type: "json_object" },
-    messages: [{ role: "system", content: sys }, { role: "user", content: user }]
+    messages: [{ role: "system", content: sys }, { role: "user", content: user }],
   });
 
   const json = JSON.parse(resp.choices[0]?.message?.content || "{}");
-  const byIndex: Record<number, { score: number; label: string; reason?: string }> = {};
+  const byIndex: Record<number, { score?: number; label?: "Easy" | "Moderate" | "Hard"; reason?: string }> = {};
+
   for (const it of json.items ?? []) {
     const idx = Number(it.index);
     if (!Number.isFinite(idx)) continue;
-    byIndex[idx] = { score: Number(it.score), label: String(it.label), reason: String(it.reason ?? "") };
+    const scoreNum = Number(it.score);
+    byIndex[idx] = {
+      score: Number.isFinite(scoreNum) ? scoreNum : undefined,
+      label: asDifficultyLabel(it.label),
+      reason: typeof it.reason === "string" ? it.reason : undefined,
+    };
   }
 
   return items.map((_, i) => {
     const v = byIndex[i + 1];
-    return v
-      ? { difficultyScore: v.score, difficultyLabel: v.label, difficultyReason: v.reason }
-      : {};
+    if (!v) return {};
+    const patch: DiffPatch = {};
+    if (typeof v.score === "number") patch.difficultyScore = v.score;
+    if (v.label) patch.difficultyLabel = v.label; // <- narrowed union type
+    if (v.reason) patch.difficultyReason = v.reason;
+    return patch;
   });
+}
+
+
+function asDifficultyLabel(x: any): "Easy" | "Moderate" | "Hard" | undefined {
+  const v = String(x ?? "");
+  return v === "Easy" || v === "Moderate" || v === "Hard" ? v : undefined;
 }
