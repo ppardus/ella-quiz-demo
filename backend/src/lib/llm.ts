@@ -7,6 +7,9 @@ type QuizItem = {
   sentenceKnownMasked: string;
   optionsKnown: string[];
   correctIndex: number;
+  difficultyScore?: number;
+  difficultyLabel?: "Easy" | "Moderate" | "Hard";
+  difficultyReason?: string;
 };
 
 export type GenerateInput = {
@@ -31,7 +34,18 @@ export async function generateWithLLM(input: GenerateInput): Promise<QuizItem[]>
   }
 
   const raw = provider === "anthropic" ? await generateAnthropic(input) : await generateOpenAI(input);
-  return finalize(raw, input.numOptions, input.shuffle !== false, input.seed);
+  const finalized = finalize(raw, input.numOptions, input.shuffle !== false, input.seed);
+
+  try {
+    const diffs = await evaluateDifficultyOpenAI(finalized, input);
+    for (let i = 0; i < finalized.length; i++) {
+      Object.assign(finalized[i], diffs[i]);
+    }
+  } catch (e) {
+    // If evaluator fails, proceed without difficulty
+    console.warn("Difficulty evaluation failed:", (e as any)?.message);
+  }
+  return finalized;
 }
 
 async function generateOpenAI(input: GenerateInput): Promise<QuizItem[]> {
@@ -227,4 +241,67 @@ function shuffle<T>(arr: T[], rnd: () => number): T[] {
 function mixSeed(seed: number | undefined, idx: number): number {
   const base = seed ?? Date.now();
   return (base ^ ((idx + 1) * 0x9e3779b1)) >>> 0;
+}
+
+async function evaluateDifficultyOpenAI(items: QuizItem[], input: GenerateInput): Promise<Partial<QuizItem>[]> {
+  const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY! });
+  const sys = "You are an educational content evaluator. Return valid JSON only.";
+
+  // Build compact payload with everything the rubric needs
+  const payload = {
+    target_language: input.targetLanguage,
+    known_language: input.knownLanguage,
+    level: input.level,
+    quizzes: items.map((q, i) => ({
+      index: i + 1,
+      sentence_target: q.sentenceTarget,
+      options_known: q.optionsKnown,
+      correct_index: q.correctIndex
+    })),
+    rubric: {
+      context_clarity: "0-3",
+      word_familiarity: "0-2",
+      distractor_quality: "0-3",
+      grammar_clue: "0-1",
+      cognate_similarity: "0-1",
+      total: "0-10",
+      labels: { easy: "8-10", moderate: "5-7", hard: "0-4" }
+    }
+  };
+
+  const user = `
+You are an educational content evaluator.
+
+Task: For each quiz, assign difficulty_score (0..10) and difficulty_label (Easy|Moderate|Hard) using this mapping:
+8–10 → Easy, 5–7 → Moderate, 0–4 → Hard.
+Also include a short "reason" string.
+
+Return ONLY strict JSON:
+{"items":[{"index":1,"score":8,"label":"Easy","reason":"..."}]}
+
+Input JSON:
+${JSON.stringify(payload)}
+`;
+
+  const resp = await client.chat.completions.create({
+    model: input.model || "gpt-4o-mini",
+    temperature: 0,
+    response_format: { type: "json_object" },
+    messages: [{ role: "system", content: sys }, { role: "user", content: user }]
+  });
+
+  const json = JSON.parse(resp.choices[0]?.message?.content || "{}");
+  const byIndex: Record<number, { score: number; label: string; reason?: string }> = {};
+  for (const it of json.items ?? []) {
+    const idx = Number(it.index);
+    if (!Number.isFinite(idx)) continue;
+    byIndex[idx] = { score: Number(it.score), label: String(it.label), reason: String(it.reason ?? "") };
+  }
+
+  return items.map((_, i) => {
+    const v = byIndex[i + 1];
+    return v
+      ? { difficultyScore: v.score, difficultyLabel: v.label, difficultyReason: v.reason }
+      : {};
+  });
 }

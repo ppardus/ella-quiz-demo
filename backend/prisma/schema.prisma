@@ -24,14 +24,16 @@ model Quiz {
   word                String
   sentenceTarget      String
   sentenceKnownMasked String
-  // SQLite can't store scalar lists; use Json for the options array:
   optionsKnown        Json
   correctIndex        Int
   slug                String   @unique
   indexInSet          Int
   createdAt           DateTime @default(now())
 
-  // back relation for answers:
+  difficultyScore     Int
+  difficultyLabel     String
+  difficultyReason    String
+
   answers QuizAnswer[]
   events  QuizEvent[]
 }
@@ -40,14 +42,14 @@ model QuizAnswer {
   id           String   @id @default(cuid())
   quizId       String
   quiz         Quiz     @relation(fields: [quizId], references: [id], onDelete: Cascade)
+  attemptToken String   // <-- NEW: identifies a single playthrough
   choiceIndex  Int?
   isCorrect    Boolean?
   action       String   // "answered" | "skipped"
   timeMs       Int?
   createdAt    DateTime @default(now())
-  attemptToken String
 
-  @@unique([quizId, attemptToken]) // one record per question per attempt
+  @@unique([quizId, attemptToken]) // <-- prevents re-answering same quiz in the same attempt
 }
 
 model QuizEvent {

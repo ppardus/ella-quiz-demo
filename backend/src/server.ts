@@ -25,10 +25,8 @@ app.use(express.json({ limit: "1mb" }));
 
 app.get("/health", (_req, res) => res.json({ ok: true }));
 
-/** ---------- FLEXIBLE INPUT PARSER ---------- **/
-function stripQuotes(s: string) {
-  return s.replace(/^["'“”‘’]|["'“”‘’]$/g, "");
-}
+/** ---------- helpers ---------- **/
+function stripQuotes(s: string) { return s.replace(/^["'“”‘’]|["'“”‘’]$/g, ""); }
 const PAIR_SEP = /\s*(?::|\/|;|→|⇒|—|–|->|=>|\s-\s)\s*/;
 
 type Word = { term: string; translation?: string };
@@ -47,10 +45,7 @@ function parseRawText(raw?: string): Word[] {
       if (csv.length >= 2) {
         const term = csv[0];
         const translation = csv[1];
-        if (term && !seen.has(term)) {
-          rows.push({ term, translation: translation ?? undefined });
-          seen.add(term);
-        }
+        if (term && !seen.has(term)) { rows.push({ term, translation: translation ?? undefined }); seen.add(term); }
         continue;
       }
     }
@@ -60,20 +55,13 @@ function parseRawText(raw?: string): Word[] {
       const term = stripQuotes(parts[0].trim());
       const translationJoined = parts.slice(1).join(":").trim();
       const translation = stripQuotes(translationJoined);
-      if (term && !seen.has(term)) {
-        rows.push({ term, translation: translation || undefined });
-        seen.add(term);
-      }
+      if (term && !seen.has(term)) { rows.push({ term, translation: translation || undefined }); seen.add(term); }
       continue;
     }
 
     const term = stripQuotes(line);
-    if (term && !seen.has(term)) {
-      rows.push({ term });
-      seen.add(term);
-    }
+    if (term && !seen.has(term)) { rows.push({ term }); seen.add(term); }
   }
-
   return rows;
 }
 
@@ -87,39 +75,13 @@ function buildSetLink(baseUrl: string, firstQuizId: string, setId: string, total
 }
 /** ------------------------------------------- **/
 
-/** ---------- ATTEMPT HELPERS (resume/next-unanswered) ---------- **/
-
-function requireAttemptToken(req: express.Request): string {
-  const t = String(req.query.attempt || "").trim();
-  if (!t) throw new Error("Missing attempt token");
-  return t;
-}
-
-async function nextUnansweredForAttempt(quizSetId: string, attemptToken: string) {
-  const quizzes = await prisma.quiz.findMany({
-    where: { quizSetId },
-    orderBy: { indexInSet: "asc" },
-    select: { id: true, indexInSet: true, sentenceTarget: true, sentenceKnownMasked: true, optionsKnown: true }
-  });
-
-  if (!quizzes.length) return null;
-
-  const answered = await prisma.quizAnswer.findMany({
-    where: { attemptToken, quizId: { in: quizzes.map(q => q.id) } },
-    select: { quizId: true }
-  });
-  const answeredSet = new Set(answered.map(a => a.quizId));
-  return quizzes.find(q => !answeredSet.has(q.id)) ?? null;
-}
-
 /** ---------- API ROUTES ---------- **/
 
+// Generate a set
 app.post("/api/quizzes/generate", async (req, res) => {
   try {
     const parsed = GenerateBody.safeParse(req.body);
-    if (!parsed.success) {
-      return res.status(400).json({ error: parsed.error.flatten() });
-    }
+    if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
 
     const { target_language, known_language, level, options, metadata } = parsed.data;
 
@@ -129,12 +91,7 @@ app.post("/api/quizzes/generate", async (req, res) => {
         : parseRawText(parsed.data.raw_text);
 
     const quizSet = await prisma.quizSet.create({
-      data: {
-        targetLanguage: target_language,
-        knownLanguage: known_language,
-        level,
-        metadata: metadata ?? null,
-      },
+      data: { targetLanguage: target_language, knownLanguage: known_language, level, metadata: metadata ?? null },
     });
 
     const items = await generateQuizzesWithLLM({
@@ -160,6 +117,9 @@ app.post("/api/quizzes/generate", async (req, res) => {
             correctIndex: q.correctIndex,
             indexInSet: i + 1,
             slug: `${quizSet.id}/${i + 1}`,
+            difficultyScore: q.difficultyScore ?? null,
+            difficultyLabel: q.difficultyLabel ?? null,
+            difficultyReason: q.difficultyReason ?? null,
           },
         })
       )
@@ -167,9 +127,7 @@ app.post("/api/quizzes/generate", async (req, res) => {
 
     const baseUrl = process.env.APP_BASE_URL || "http://localhost:5173";
     const firstQuiz = quizzes[0];
-    const link = firstQuiz
-      ? buildSetLink(baseUrl, firstQuiz.id, quizSet.id, quizzes.length)
-      : null;
+    const link = firstQuiz ? buildSetLink(baseUrl, firstQuiz.id, quizSet.id, quizzes.length) : null;
 
     res.json({
       quiz_set_id: quizSet.id,
@@ -190,6 +148,7 @@ app.post("/api/quizzes/generate", async (req, res) => {
   }
 });
 
+// Link builder
 app.get("/api/quiz-sets/:id/link", async (req, res) => {
   const set = await prisma.quizSet.findUnique({ where: { id: req.params.id } });
   if (!set) return res.status(404).json({ error: "Not found" });
@@ -208,6 +167,7 @@ app.get("/api/quiz-sets/:id/link", async (req, res) => {
   res.json({ quiz_set_id: set.id, total, link });
 });
 
+// Quiz details
 app.get("/api/quizzes/:quiz_id", async (req, res) => {
   const q = await prisma.quiz.findUnique({ where: { id: req.params.quiz_id } });
   if (!q) return res.status(404).json({ error: "Not found" });
@@ -220,9 +180,12 @@ app.get("/api/quizzes/:quiz_id", async (req, res) => {
     sentence_target: q.sentenceTarget,
     sentence_known_masked: q.sentenceKnownMasked,
     options_known: q.optionsKnown,
+    difficulty_label: q.difficultyLabel ?? null,
+    difficulty_score: q.difficultyScore ?? null,
   });
 });
 
+// List quizzes in set
 app.get("/api/quiz-sets/:id/quizzes", async (req, res) => {
   const set = await prisma.quizSet.findUnique({ where: { id: req.params.id } });
   if (!set) return res.status(404).json({ error: "Not found" });
@@ -237,97 +200,117 @@ app.get("/api/quiz-sets/:id/quizzes", async (req, res) => {
   });
 });
 
-/** ---- NEW: next unanswered for an attempt (resume link behavior) ---- */
+/** ---------- Attempt-aware flow ---------- **/
+
+// First unanswered for an attempt
 app.get("/api/quiz-sets/:id/next", async (req, res) => {
-  try {
-    const set = await prisma.quizSet.findUnique({ where: { id: req.params.id } });
-    if (!set) return res.status(404).json({ error: "Quiz set not found" });
+  const setId = req.params.id;
+  const attempt = String(req.query.attempt ?? "").trim();
+  if (!attempt) return res.status(400).json({ error: "Missing attempt" });
 
-    const attempt = requireAttemptToken(req);
-    const nextQ = await nextUnansweredForAttempt(set.id, attempt);
+  const set = await prisma.quizSet.findUnique({ where: { id: setId } });
+  if (!set) return res.status(404).json({ error: "Not found" });
 
-    if (!nextQ) return res.json({ status: "completed" });
+  const quizzes = await prisma.quiz.findMany({
+    where: { quizSetId: setId },
+    orderBy: { indexInSet: "asc" },
+    select: { id: true, indexInSet: true },
+  });
+  const ids = quizzes.map((q) => q.id);
+  const total = ids.length;
 
-    res.json({
-      status: "in_progress",
-      question: {
-        quiz_id: nextQ.id,
-        index: nextQ.indexInSet,
-        sentence_target: nextQ.sentenceTarget,
-        sentence_known_masked: nextQ.sentenceKnownMasked,
-        options_known: nextQ.optionsKnown,
-      },
-    });
-  } catch (e: any) {
-    res.status(400).json({ error: e?.message ?? "Bad request" });
+  const answers = await prisma.quizAnswer.findMany({
+    where: { quizId: { in: ids }, attemptToken: attempt },
+    select: { quizId: true, action: true },
+  });
+  const answered = new Set<string>(answers.map((a) => a.quizId)); // both answered & skipped count as “answered” for flow
+
+  const next = quizzes.find((q) => !answered.has(q.id));
+  if (!next) {
+    return res.json({ status: "completed", total });
   }
+  res.json({
+    status: "in_progress",
+    total,
+    question: { quiz_id: next.id, index: next.indexInSet },
+  });
 });
 
-/** ---- UPDATED: answer route requires attempt, idempotent per question+attempt ---- */
+// Continue (same as next, but return minimal fields)
+app.get("/api/quiz-sets/:id/continue", async (req, res) => {
+  const setId = req.params.id;
+  const attempt = String(req.query.attempt ?? "").trim();
+  if (!attempt) return res.status(400).json({ error: "Missing attempt" });
+
+  const quizzes = await prisma.quiz.findMany({
+    where: { quizSetId: setId },
+    orderBy: { indexInSet: "asc" },
+    select: { id: true, indexInSet: true },
+  });
+  const ids = quizzes.map((q) => q.id);
+  const total = quizzes.length;
+
+  const answers = await prisma.quizAnswer.findMany({
+    where: { quizId: { in: ids }, attemptToken: attempt },
+    select: { quizId: true },
+  });
+  const answered = new Set<string>(answers.map((a) => a.quizId));
+
+  const next = quizzes.find((q) => !answered.has(q.id));
+  if (!next) return res.json({ status: "completed", total });
+  res.json({
+    status: "in_progress",
+    next_quiz_id: next.id,
+    index: next.indexInSet,
+    total,
+  });
+});
+
+// Answer or skip (idempotent per quiz+attempt)
 app.post("/api/quizzes/:quiz_id/answer", async (req, res) => {
-  const body = z
-    .object({
-      choice_index: z.number().int().optional(),
-      time_ms: z.number().int().min(0).optional(),
-      action: z.enum(["answered", "skipped"]),
-      attempt: z.string().min(1),
-    })
-    .safeParse(req.body);
+  const body = z.object({
+    choice_index: z.number().int().optional(),
+    time_ms: z.number().int().min(0).optional(),
+    action: z.enum(["answered", "skipped"]),
+    attempt: z.string().min(6),
+  }).safeParse(req.body);
+  console.log(body)
+
   if (!body.success) return res.status(400).json({ error: body.error.flatten() });
 
   const quiz = await prisma.quiz.findUnique({ where: { id: req.params.quiz_id } });
   if (!quiz) return res.status(404).json({ error: "Not found" });
 
   const { choice_index, action, time_ms, attempt } = body.data;
-  const isCorrect =
-    action === "answered" ? (choice_index ?? -1) === quiz.correctIndex : null;
+  const isCorrect = action === "answered" ? ((choice_index ?? -1) === quiz.correctIndex) : null;
 
   try {
     await prisma.quizAnswer.create({
       data: {
         quizId: quiz.id,
+        attemptToken: attempt ?? null,
         choiceIndex: choice_index ?? null,
         isCorrect,
         action,
         timeMs: time_ms ?? null,
-        attemptToken: attempt,
       },
     });
+    return res.json({ correct: Boolean(isCorrect), correct_index: quiz.correctIndex, already_recorded: false });
   } catch (e: any) {
-    // Unique violation -> already answered/skipped for this attempt
+    // If unique constraint hit (already answered for this attempt), return idempotent result
     if (String(e?.code) === "P2002") {
-      const existing = await prisma.quizAnswer.findFirst({
+      const prev = await prisma.quizAnswer.findFirst({
         where: { quizId: quiz.id, attemptToken: attempt },
+        orderBy: { createdAt: "asc" },
       });
-      return res.json({
-        already_recorded: true,
-        correct: existing?.isCorrect ?? false,
-        correct_index: quiz.correctIndex,
-      });
+      return res.json({ correct: Boolean(prev?.isCorrect), correct_index: quiz.correctIndex, already_recorded: true });
     }
-    throw e;
-  }
-
-  res.json({ correct: isCorrect ?? false, correct_index: quiz.correctIndex });
-});
-
-/** ---- NEW: continue to the next unanswered after a submit/skip ---- */
-app.get("/api/quiz-sets/:id/continue", async (req, res) => {
-  try {
-    const set = await prisma.quizSet.findUnique({ where: { id: req.params.id } });
-    if (!set) return res.status(404).json({ error: "Quiz set not found" });
-
-    const attempt = requireAttemptToken(req);
-    const nextQ = await nextUnansweredForAttempt(set.id, attempt);
-    if (!nextQ) return res.json({ status: "completed" });
-
-    res.json({ status: "in_progress", next_quiz_id: nextQ.id, index: nextQ.indexInSet });
-  } catch (e: any) {
-    res.status(400).json({ error: e?.message ?? "Bad request" });
+    console.error(e);
+    return res.status(500).json({ error: "Failed to record answer" });
   }
 });
 
-/** ---------- record “Next” click with timestamp ---------- **/
+/** ---------- (optional) record “Next” click with timestamp ---------- **/
 app.post("/api/quizzes/:quiz_id/next-click", async (req, res) => {
   const quiz = await prisma.quiz.findUnique({ where: { id: req.params.quiz_id } });
   if (!quiz) return res.status(404).json({ error: "Not found" });
@@ -338,38 +321,44 @@ app.post("/api/quizzes/:quiz_id/next-click", async (req, res) => {
   res.json({ ok: true, recorded_at: new Date().toISOString() });
 });
 
-/** ---- UPDATED: summary distinguishes skipped vs unanswered (per attempt) ---- */
+/** ---------- Summary (attempt-aware) ---------- **/
 app.get("/api/quiz-sets/:id/summary", async (req, res) => {
   const set = await prisma.quizSet.findUnique({ where: { id: req.params.id } });
   if (!set) return res.status(404).json({ error: "Not found" });
 
-  const attempt = String(req.query.attempt || "").trim() || null;
+  const attempt = (req.query.attempt ?? "").toString().trim();
 
   const quizzes = await prisma.quiz.findMany({
     where: { quizSetId: set.id },
     orderBy: { indexInSet: "asc" },
   });
+  const quizIds = quizzes.map((q) => q.id);
 
   const answers = await prisma.quizAnswer.findMany({
     where: {
-      quizId: { in: quizzes.map((q) => q.id) },
+      quizId: { in: quizIds },
       ...(attempt ? { attemptToken: attempt } : {}),
     },
     orderBy: { createdAt: "asc" },
   });
 
   const events = await prisma.quizEvent.findMany({
-    where: { quizId: { in: quizzes.map((q) => q.id) } },
+    where: { quizId: { in: quizIds } },
     orderBy: { createdAt: "asc" },
   });
 
+  // Latest per quiz for this attempt (if attempt provided), otherwise latest overall
   const latest = new Map<string, (typeof answers)[number]>();
   for (const a of answers) latest.set(a.quizId, a);
 
-  let correct = 0,
-    incorrect = 0,
-    skipped = 0,
-    unanswered = 0;
+  let correct = 0, incorrect = 0, skipped = 0, unanswered = 0;
+
+  const byDifficulty = { Easy: 0, Moderate: 0, Hard: 0, Unknown: 0 };
+  for (const q of quizzes) {
+    const label = (q as any).difficultyLabel as string | null;
+    if (label === "Easy" || label === "Moderate" || label === "Hard") byDifficulty[label]++;
+    else byDifficulty.Unknown++;
+  }
 
   const items = quizzes.map((q) => {
     const a = latest.get(q.id);
@@ -383,6 +372,7 @@ app.get("/api/quiz-sets/:id/summary", async (req, res) => {
         time_ms = a.timeMs ?? null;
       } else if (a.action === "skipped") {
         result = "skipped";
+        time_ms = a.timeMs ?? null;
       }
       if (a.createdAt) answered_at = a.createdAt.toISOString();
     }
@@ -393,22 +383,19 @@ app.get("/api/quiz-sets/:id/summary", async (req, res) => {
     else unanswered++;
 
     const formatted_time = formatTime(time_ms);
-    return {
-      quiz_id: q.id,
-      word: q.word,
-      result,
-      formatted_time: formatted_time,
-      answered_at,
-    };
+    return { quiz_id: q.id, word: q.word, result, formatted_time, answered_at, difficulty_label: q.difficultyLabel ?? null, difficulty_score: q.difficultyScore ?? null, };
   });
 
-  const overall_accuracy = correct / Math.max(1, correct + incorrect);
+  const total = items.length || 1;
+  const attempted = total - unanswered;
+  const denom = attempted || 1;
+  const overall_accuracy = correct / denom; // exclude skipped & unanswered from accuracy
 
   res.json({
     quiz_set_id: set.id,
-    attempt: attempt ?? undefined,
-    counts: { correct, incorrect, skipped, unanswered },
     overall_accuracy,
+    counts: { correct, incorrect, skipped, unanswered },
+    difficulty: byDifficulty,
     items,
     events: events.map((e) => ({
       type: e.type,
@@ -419,13 +406,12 @@ app.get("/api/quiz-sets/:id/summary", async (req, res) => {
   });
 });
 
-/** ---------- SPA STATIC SERVE (universal) ---------- **/
+/** ---------- SPA STATIC SERVE (fallback) ---------- **/
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const FRONTEND_DIST_ENV = process.env.FRONTEND_DIST;
-
 const candidatePaths = [
   FRONTEND_DIST_ENV,
   path.resolve(__dirname, "../frontend/dist"),
@@ -454,6 +440,8 @@ if (frontendDist) {
     res.status(404).json({ error: "API route not found" });
   });
 }
+
+/** -------------------------------------------------------------------- **/
 
 const PORT = Number(process.env.PORT || 3000);
 app.listen(PORT, () => console.log(`API listening on :${PORT}`));
