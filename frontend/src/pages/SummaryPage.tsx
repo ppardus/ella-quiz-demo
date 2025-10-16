@@ -101,27 +101,6 @@ export default function SummaryPage() {
       </div>
 
       {/* Row 2: Difficulty (same grid → widths match) */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-        <Card
-          label="Easy"
-          value={diff.Easy || 0}
-        />
-        <Card
-          label="Moderate"
-          value={diff.Moderate || 0}
-        />
-        <Card
-          label="Hard"
-          value={diff.Hard || 0}
-        />
-        {/* If you also want Unknown, uncomment and change grid to md:grid-cols-4 for both rows
-        <Card
-          label="Difficulty"
-          value={diff.Unknown || 0}
-          right={<Chip text="Unscored" tone="gray" />}
-        />
-        */}
-      </div>
 
       {/* Results */}
       <div className="space-y-4">
