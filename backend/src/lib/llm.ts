@@ -51,44 +51,45 @@ export async function generateWithLLM(input: GenerateInput): Promise<QuizItem[]>
 export async function generateOpenAI(input: GenerateInput): Promise<QuizItem[]> {
   const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY! });
 
-  // Keep the system prompt tight for faster startup latency.
-  const sys = `You are a precise ${input.targetLanguage} vocabulary quiz generator for ${input.level} learners. Output STRICT JSON only.`;
+  const sys = `You are a precise ${input.targetLanguage} vocabulary quiz generator for ${input.level} learners. Return JSON only.`;
 
-  const wordsList = input.words
-    .map((w, i) => `${i + 1}. ${w.term}${w.translation ? ` — ${w.translation}` : ""}`)
-    .join("\n");
+const wordsList = input.words
+  .map((w, i) => `${i + 1}. ${w.term}${w.translation ? ` — ${w.translation}` : ""}`)
+  .join("\n");
 
-  // Keep user prompt concise but explicit. Avoid extra verbosity.
-  const user = `
-Task: Generate multiple-choice vocabulary quizzes.
+const user = `
+Generate ${input.words.length} multiple-choice vocabulary quizzes.
 
-Input:
-- ${input.targetLanguage} words with optional ${input.knownLanguage} translations:
+STRICT RULES (must obey):
+- The **target word/phrase must appear EXACTLY as provided** in the ${input.targetLanguage} sentence (identical characters and spacing). 
+- Do **not** conjugate, decline, or inflect the provided form. If the original form is a phrase (e.g., "darse cuenta"), include that exact phrase verbatim.
+- If the sentence would be ungrammatical, rephrase the sentence (not the target) so it remains correct while keeping the exact token intact.
+- Do not wrap the target in quotes or punctuation that changes the token. Keep it as a standalone token or phrase.
+
+Input words:
 ${wordsList}
 
-For EACH word, produce:
-- sentence_target: a short, natural ${input.targetLanguage} sentence containing the target word.
-- sentence_known_masked: the same sentence translated into ${input.knownLanguage} with the target word replaced by "_____".
-- options_known: ${input.numOptions} ${input.knownLanguage} options (1 correct + ${input.numOptions - 1} distractors), all fitting grammatically and semantically in the masked sentence.
-- correct_index: 0-based index of the correct option.
+For each word, return strict JSON with:
+- sentence_target: ${input.targetLanguage} sentence containing the target word/phrase EXACTLY as provided (verbatim)
+- sentence_known_masked: same sentence in ${input.knownLanguage}, the target replaced by "_____"
+- options_known: ${input.numOptions} options in ${input.knownLanguage}
+  • exactly 1 correct translation of the target word/phrase
+  • ${input.numOptions - 1} plausible distractors of the SAME part of speech
+  • distractors should be semantically CLOSE and confusable in context, but WRONG
+  • avoid obvious cognates, length cues, or category outliers
+- correct_index: 0-based index of the correct option
 
-Constraints:
-- Use vocabulary/grammar at or below ${input.level}.
-- Sentences must be concise and grammatical.
-- The ${input.knownLanguage} translation must be faithful except for the "_____" placeholder.
-- Distractors share part of speech (and gender/number/case if applicable) with the correct answer.
-- Validation: Replacing each option in the ${input.targetLanguage} sentence remains grammatically correct; only the correct option preserves the original meaning in context.
+Style constraints:
+- Only vocab/grammar at or below ${input.level}.
+- Sentences short, natural, grammatical.
+- Do NOT reveal the translation in the sentence.
+- Vary the position of the correct option.
 
-Return ONLY strict JSON EXACTLY in this shape (no comments, no trailing text):
+Return ONLY JSON in this shape:
 {"items":[
   {"word":"...","sentence_target":"...","sentence_known_masked":"...","options_known":["a","b","c","d"],"correct_index":0}
-]}
+]}`;
 
-Rules:
-- Do not include explanations.
-- Create exactly ${input.words.length} items.
-- options_known length MUST equal ${input.numOptions}.
-`;
 
   // Use Responses API so we can pass `reasoning`.
   const resp = await client.responses.create({
