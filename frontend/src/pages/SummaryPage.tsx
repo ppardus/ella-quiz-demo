@@ -25,31 +25,6 @@ function Card({
   );
 }
 
-function Chip({
-  text,
-  tone = "gray",
-  title,
-}: {
-  text: string;
-  tone?: "green" | "yellow" | "red" | "gray";
-  title?: string;
-}) {
-  const tones: Record<string, string> = {
-    green: "bg-green-50 text-green-700 border-green-200",
-    yellow: "bg-yellow-50 text-yellow-700 border-yellow-200",
-    red: "bg-red-50 text-red-700 border-red-200",
-    gray: "bg-gray-50 text-gray-700 border-gray-200",
-  };
-  return (
-    <span
-      className={`inline-flex items-center px-2 py-0.5 text-xs rounded-full border whitespace-nowrap ${tones[tone]}`}
-      title={title}
-    >
-      {text}
-    </span>
-  );
-}
-
 export default function SummaryPage() {
   const { setId } = useParams();
   const [sp] = useSearchParams();
