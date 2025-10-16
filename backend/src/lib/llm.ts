@@ -48,66 +48,78 @@ export async function generateWithLLM(input: GenerateInput): Promise<QuizItem[]>
   return finalized;
 }
 
-async function generateOpenAI(input: GenerateInput): Promise<QuizItem[]> {
+export async function generateOpenAI(input: GenerateInput): Promise<QuizItem[]> {
   const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY! });
 
-  const sys = `You are a precise ${input.targetLanguage} vocabulary quiz generator for ${input.level} learners. Return JSON only.`;
+  // Keep the system prompt tight for faster startup latency.
+  const sys = `You are a precise ${input.targetLanguage} vocabulary quiz generator for ${input.level} learners. Output STRICT JSON only.`;
 
   const wordsList = input.words
     .map((w, i) => `${i + 1}. ${w.term}${w.translation ? ` — ${w.translation}` : ""}`)
     .join("\n");
 
+  // Keep user prompt concise but explicit. Avoid extra verbosity.
   const user = `
-You are a precise ${input.targetLanguage} vocabulary quiz generator for ${input.level} learners.
-
-Task:
-Generate multiple-choice vocabulary quizzes.
+Task: Generate multiple-choice vocabulary quizzes.
 
 Input:
-A list of ${input.targetLanguage} words with their ${input.knownLanguage} translations (optional).
-
-Output (for each word):
-- A short, natural ${input.targetLanguage} sentence containing the target word.
-- The same sentence translated into ${input.knownLanguage}, with the target word replaced by "_____".
-- ${input.numOptions} answer options in ${input.knownLanguage}: one correct translation and ${input.numOptions - 1} distractors.
-- All options must fit grammatically and semantically in the translated sentence.
-- Only the correct answer must preserve the full meaning of the ${input.targetLanguage} sentence.
-
-Guidelines:
-- Use vocabulary and grammar at or below ${input.level}.
-- Sentences must be natural, concise, and grammatically correct.
-- The ${input.knownLanguage} translation must be accurate and faithful to the ${input.targetLanguage} sentence except for "_____".
-- Distractors must share the same part of speech, gender, number, and case as the correct answer.
-- The placeholder "_____" must always be present in the ${input.knownLanguage} translation.
-
-Validation Rules:
-Grammatical Validation:
-- Replace each option in the ${input.targetLanguage} sentence; all options must remain grammatically correct.
-Semantic Validation:
-- Replace each option in the translation; all must be coherent in context, but only the correct option exactly matches the intended meaning of the original sentence.
-
-Generate quizzes for these words:
+- ${input.targetLanguage} words with optional ${input.knownLanguage} translations:
 ${wordsList}
 
-Return ONLY strict JSON in this exact shape:
+For EACH word, produce:
+- sentence_target: a short, natural ${input.targetLanguage} sentence containing the target word.
+- sentence_known_masked: the same sentence translated into ${input.knownLanguage} with the target word replaced by "_____".
+- options_known: ${input.numOptions} ${input.knownLanguage} options (1 correct + ${input.numOptions - 1} distractors), all fitting grammatically and semantically in the masked sentence.
+- correct_index: 0-based index of the correct option.
+
+Constraints:
+- Use vocabulary/grammar at or below ${input.level}.
+- Sentences must be concise and grammatical.
+- The ${input.knownLanguage} translation must be faithful except for the "_____" placeholder.
+- Distractors share part of speech (and gender/number/case if applicable) with the correct answer.
+- Validation: Replacing each option in the ${input.targetLanguage} sentence remains grammatically correct; only the correct option preserves the original meaning in context.
+
+Return ONLY strict JSON EXACTLY in this shape (no comments, no trailing text):
 {"items":[
   {"word":"...","sentence_target":"...","sentence_known_masked":"...","options_known":["a","b","c","d"],"correct_index":0}
-]}`;
+]}
 
-  const resp = await client.chat.completions.create({
-    model: input.model || "gpt-4o-mini",
-    temperature: 0.3,
-    response_format: { type: "json_object" },
-    messages: [{ role: "system", content: sys }, { role: "user", content: user }]
+Rules:
+- Do not include explanations.
+- Create exactly ${input.words.length} items.
+- options_known length MUST equal ${input.numOptions}.
+`;
+
+  // Use Responses API so we can pass `reasoning`.
+  const resp = await client.responses.create({
+    model: input.model || "gpt-5",
+    reasoning: { effort: "minimal" },
+    input: [
+      { role: "system", content: [{ type: "input_text", text: sys }] },
+      { role: "user",   content: [{ type: "input_text", text: user }] },
+    ],
   });
 
-  const json = JSON.parse(resp.choices[0]?.message?.content || "{}");
-  return (json.items ?? []).map((it: any) => ({
+  // The SDK provides output_text for convenience when you use response_format json_object.
+  const text = resp.output_text ?? "";
+  if (!text.trim()) throw new Error("Empty response from model.");
+
+  let parsed: any;
+  try {
+    parsed = JSON.parse(text);
+  } catch (e) {
+    // If the model ever returns extra whitespace/newlines, try a gentle cleanup then parse again.
+    const cleaned = text.trim().replace(/^[^\{]*\{/, "{").replace(/\}[^\}]*$/, "}");
+    parsed = JSON.parse(cleaned);
+  }
+
+  const items = Array.isArray(parsed?.items) ? parsed.items : [];
+  return items.map((it: any): QuizItem => ({
     word: it.word,
     sentenceTarget: it.sentence_target,
     sentenceKnownMasked: it.sentence_known_masked,
     optionsKnown: it.options_known,
-    correctIndex: it.correct_index
+    correctIndex: it.correct_index,
   }));
 }
 
@@ -282,14 +294,17 @@ Input JSON:
 ${JSON.stringify(payload)}
 `;
 
-  const resp = await client.chat.completions.create({
-    model: input.model || "gpt-4o-mini",
-    temperature: 0,
-    response_format: { type: "json_object" },
-    messages: [{ role: "system", content: sys }, { role: "user", content: user }],
+  const resp = await client.responses.create({
+    model: input.model || "gpt-5",
+    reasoning: { effort: "minimal" },
+    input: [
+      { role: "system", content: [{ type: "input_text", text: sys }] },
+      { role: "user",   content: [{ type: "input_text", text: user }] },
+    ],
   });
 
-  const json = JSON.parse(resp.choices[0]?.message?.content || "{}");
+  // const json = JSON.parse(resp.choices[0]?.message?.content || "{}");
+  const json = JSON.parse(resp.output_text)
   const byIndex: Record<number, { score?: number; label?: "Easy" | "Moderate" | "Hard"; reason?: string }> = {};
 
   for (const it of json.items ?? []) {

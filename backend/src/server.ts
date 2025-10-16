@@ -275,7 +275,6 @@ app.post("/api/quizzes/:quiz_id/answer", async (req, res) => {
     action: z.enum(["answered", "skipped"]),
     attempt: z.string().min(6),
   }).safeParse(req.body);
-  console.log(body)
 
   if (!body.success) return res.status(400).json({ error: body.error.flatten() });
 
