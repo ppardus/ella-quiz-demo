@@ -76,9 +76,8 @@ export default function SummaryPage() {
   if (err) return <div className="text-red-600">{err}</div>;
   if (!data) return <div className="text-gray-600">Loading summary…</div>;
 
-  const { counts, overall_accuracy, difficulty } = data;
+  const { counts, overall_accuracy } = data;
   const pct = Math.round((overall_accuracy || 0) * 100);
-  const diff = difficulty || { Easy: 0, Moderate: 0, Hard: 0, Unknown: 0 };
 
   return (
     <div className="bg-white shadow-xl rounded-2xl p-6 space-y-6">
