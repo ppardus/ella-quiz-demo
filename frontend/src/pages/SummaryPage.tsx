@@ -113,29 +113,6 @@ export default function SummaryPage() {
                 {it.word}
               </div>
 
-              <div className="mt-3 flex items-center justify-between">
-                <span className="text-sm text-gray-500">Difficulty</span>
-                {it.difficulty_label ? (
-                  <Chip
-                    text={it.difficulty_label}
-                    tone={
-                      it.difficulty_label === "Easy"
-                        ? "green"
-                        : it.difficulty_label === "Moderate"
-                        ? "yellow"
-                        : "red"
-                    }
-                    title={
-                      it.difficulty_score != null
-                        ? `Score ${it.difficulty_score}/10`
-                        : undefined
-                    }
-                  />
-                ) : (
-                  <span className="text-sm text-gray-500">—</span>
-                )}
-              </div>
-
               <div className="mt-2 flex items-center justify-between">
                 <span className="text-sm text-gray-500">Result</span>
                 <span className="font-medium">
@@ -162,7 +139,6 @@ export default function SummaryPage() {
               <thead className="bg-gray-50">
                 <tr>
                   <th className="text-left p-3 border">Word</th>
-                  <th className="text-left p-3 border">Difficulty</th>
                   <th className="text-left p-3 border">Result</th>
                   <th className="text-left p-3 border">Time</th>
                 </tr>
@@ -173,27 +149,7 @@ export default function SummaryPage() {
                     <td className="p-3 border break-words whitespace-normal hyphens-auto leading-relaxed">
                       {it.word}
                     </td>
-                    <td className="p-3 border">
-                      {it.difficulty_label ? (
-                        <Chip
-                          text={it.difficulty_label}
-                          tone={
-                            it.difficulty_label === "Easy"
-                              ? "green"
-                              : it.difficulty_label === "Moderate"
-                              ? "yellow"
-                              : "red"
-                          }
-                          title={
-                            it.difficulty_score != null
-                              ? `Score ${it.difficulty_score}/10`
-                              : undefined
-                          }
-                        />
-                      ) : (
-                        "—"
-                      )}
-                    </td>
+                    
                     <td className="p-3 border">
                       {it.result === "correct"
                         ? "✅ Correct"
