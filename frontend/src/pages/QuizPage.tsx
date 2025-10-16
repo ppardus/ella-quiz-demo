@@ -345,7 +345,7 @@ export default function QuizPage() {
           {/* {copied && <span className="text-xs text-green-600 ml-1">Copied!</span>} */}
 
           {/* Difficulty tag (informational only) */}
-          {quiz.difficulty_label && (
+          {/* {quiz.difficulty_label && (
             <span
               className={
                 "ml-2 inline-block px-2 py-0.5 text-xs rounded-full border " +
@@ -359,7 +359,7 @@ export default function QuizPage() {
             >
               {quiz.difficulty_label}
             </span>
-          )}
+          )} */}
         </div>
       </div>
       <h2

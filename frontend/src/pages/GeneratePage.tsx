@@ -2,18 +2,23 @@ import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { generateQuizzes } from "../lib/api";
 
-const SAMPLE = `Entscheidung: decision
-Einladung/ invitation
-Frage;question
-Gespräch -> conversation
-"Zeit","time"
+const SAMPLE = `decisione: decision
+invito/ invitation
+domanda; question
+conversazione -> conversation
+"tempo","time"
+casa: house
+strada/ street
+porta; door
+libro -> book
+scuola: school
 `;
 
 export default function GeneratePage() {
   const nav = useNavigate();
-  const [targetLang, setTargetLang] = useState("German");
+  const [targetLang, setTargetLang] = useState("Italian");
   const [knownLang, setKnownLang] = useState("English");
-  const [level, setLevel] = useState("A2");
+  const [level, setLevel] = useState("B1");
   const [text, setText] = useState(SAMPLE);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
