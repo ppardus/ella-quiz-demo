@@ -291,6 +291,45 @@ export default function QuizPage() {
       setErrMsg("Could not load the next question.");
     }
   }
+  function escapeHtml(s: string) {
+    return s
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;")
+      .replace(/'/g, "&#39;");
+  }
+
+  function escapeRegExp(s: string) {
+    return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  }
+
+  /**
+   * Highlight all occurrences of `target` in `sentence` with a soft background.
+   * Uses Unicode-aware “letter” boundaries so it works for non-Latin scripts too.
+   */
+  function highlightTarget(sentence: string, target: string) {
+    if (!sentence || !target) return escapeHtml(sentence || "");
+
+    const escapedTarget = escapeRegExp(target.trim());
+    if (!escapedTarget) return escapeHtml(sentence);
+
+    // Unicode letter boundary: not a letter before/after
+    // (?<!\p{L}) ... (?!\p{L})  with /u for Unicode, /i for case-insensitive, /g for all
+    let re: RegExp;
+    try {
+      re = new RegExp(`(?<!\\p{L})(${escapedTarget})(?!\\p{L})`, "giu");
+    } catch {
+      // Fallback if \p{L} unsupported: basic word boundaries
+      re = new RegExp(`\\b(${escapedTarget})\\b`, "gi");
+    }
+
+    const safe = escapeHtml(sentence);
+    return safe.replace(
+      re,
+      '<span class="bg-yellow-100 rounded px-1">$1</span>'
+    );
+  }
 
   // If we’re in the “bare link” normalization we’ll navigate away quickly; until then show loader.
   if (!setId && loading) return <div className="text-gray-600">Loading quiz…</div>;
@@ -333,7 +372,7 @@ export default function QuizPage() {
         </div>
       </div>
 
-      <h2 className="text-xl font-semibold mb-2" dangerouslySetInnerHTML={{ __html: quiz.sentence_target }} />
+      <h2 className="text-xl font-semibold mb-2" dangerouslySetInnerHTML={{ __html: highlightTarget(quiz.sentence_target, quiz.word) }} />
       <p className="text-gray-600 mb-6">{quiz.sentence_known_masked}</p>
 
       <div className="grid grid-cols-1 gap-3">
