@@ -299,29 +299,20 @@ export default function QuizPage() {
       .replace(/"/g, "&quot;")
       .replace(/'/g, "&#39;");
   }
-
   function escapeRegExp(s: string) {
     return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   }
-
-  /**
-   * Highlight all occurrences of `target` in `sentence` with a soft background.
-   * Uses Unicode-aware “letter” boundaries so it works for non-Latin scripts too.
-   */
+  /** Highlight `target` in `sentence` with a soft bg; Unicode-safe boundaries. */
   function highlightTarget(sentence: string, target: string) {
     if (!sentence || !target) return escapeHtml(sentence || "");
-
     const escapedTarget = escapeRegExp(target.trim());
     if (!escapedTarget) return escapeHtml(sentence);
 
-    // Unicode letter boundary: not a letter before/after
-    // (?<!\p{L}) ... (?!\p{L})  with /u for Unicode, /i for case-insensitive, /g for all
     let re: RegExp;
     try {
-      re = new RegExp(`(?<!\\p{L})(${escapedTarget})(?!\\p{L})`, "giu");
+      re = new RegExp(`(?<!\\p{L})(${escapedTarget})(?!\\p{L})`, "giu"); // unicode letter boundary
     } catch {
-      // Fallback if \p{L} unsupported: basic word boundaries
-      re = new RegExp(`\\b(${escapedTarget})\\b`, "gi");
+      re = new RegExp(`\\b(${escapedTarget})\\b`, "gi"); // fallback
     }
 
     const safe = escapeHtml(sentence);
@@ -371,8 +362,10 @@ export default function QuizPage() {
           )}
         </div>
       </div>
-
-      <h2 className="text-xl font-semibold mb-2" dangerouslySetInnerHTML={{ __html: highlightTarget(quiz.sentence_target, quiz.word) }} />
+      <h2
+        className="text-xl font-semibold mb-2"
+        dangerouslySetInnerHTML={{ __html: highlightTarget(quiz.sentence_target, quiz.word) }}
+      />
       <p className="text-gray-600 mb-6">{quiz.sentence_known_masked}</p>
 
       <div className="grid grid-cols-1 gap-3">

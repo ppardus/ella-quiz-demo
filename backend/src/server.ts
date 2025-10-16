@@ -177,6 +177,7 @@ app.get("/api/quizzes/:quiz_id", async (req, res) => {
     quiz_set_id: q.quizSetId,
     index: q.indexInSet,
     total,
+    word: q.word,
     sentence_target: q.sentenceTarget,
     sentence_known_masked: q.sentenceKnownMasked,
     options_known: q.optionsKnown,
