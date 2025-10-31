@@ -20,14 +20,14 @@ export type GenerateInput = {
   level: string;
   words: { term: string; translation?: string }[];
   numOptions: number;
-  model?: string;     // optional model override for generation
-  seed?: number;      // optional shuffle seed
-  shuffle?: boolean;  // default true
+  model?: string;
+  seed?: number;
+  shuffle?: boolean; // default true
 };
 
 const provider = (process.env.PREFERRED_LLM || "openai").toLowerCase();
 
-/** Entry point used by the generator service */
+/** Entry point */
 export async function generateWithLLM(input: GenerateInput): Promise<QuizItem[]> {
   if (provider === "openai" && !process.env.OPENAI_API_KEY) {
     throw new Error("Missing OPENAI_API_KEY in environment");
@@ -36,19 +36,17 @@ export async function generateWithLLM(input: GenerateInput): Promise<QuizItem[]>
     throw new Error("Missing ANTHROPIC_API_KEY in environment");
   }
 
-  // 1) Generate raw items
   const raw =
     provider === "anthropic" ? await generateAnthropic(input) : await generateOpenAI(input);
 
-  // 2) Normalize (dedupe options, ensure correct present, seeded shuffle, recompute index)
-  const finalized = finalize(raw, input.numOptions, input.shuffle !== false, input.seed);
+  // sanitize options & enforce highlight tag before finalizing
+  const sanitized = raw.map(enforceHighlightAndSanitize);
 
-  // 3) Evaluate difficulty (best effort, won’t throw)
+  const finalized = finalize(sanitized, input.numOptions, input.shuffle !== false, input.seed);
+
   try {
     const diffs = await evaluateDifficultyOpenAI(finalized, input);
-    for (let i = 0; i < finalized.length; i++) {
-      Object.assign(finalized[i], diffs[i]);
-    }
+    for (let i = 0; i < finalized.length; i++) Object.assign(finalized[i], diffs[i]);
   } catch (e) {
     console.warn("Difficulty evaluation failed:", (e as any)?.message);
   }
@@ -56,7 +54,7 @@ export async function generateWithLLM(input: GenerateInput): Promise<QuizItem[]>
   return finalized;
 }
 
-/* -------------------------- Generation (OpenAI) ------------------------- */
+/* ------------------------- Generation: OpenAI -------------------------- */
 
 async function generateOpenAI(input: GenerateInput): Promise<QuizItem[]> {
   const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY! });
@@ -76,44 +74,28 @@ Generate multiple-choice vocabulary quizzes.
 Input:
 A list of ${input.targetLanguage} words with their ${input.knownLanguage} translations (optional).
 
-Output (for each word):
-- A short, natural ${input.targetLanguage} sentence containing the target word.
-- The same sentence translated into ${input.knownLanguage}, with the target word replaced by "_____".
-- ${input.numOptions} answer options in ${input.knownLanguage}: one correct translation and ${
+Output (for each word) — JSON fields:
+- sentence_target: a short, natural ${input.targetLanguage} sentence that **contains the target word wrapped in <tgt>…</tgt>**. Example: "Ich habe gestern eine <tgt>Entscheidung</tgt> getroffen."
+- sentence_known_masked: the same sentence translated into ${input.knownLanguage}, with **only the target word replaced** by "_____". Keep any required article, preposition, auxiliary, or classifier **outside** the blank.
+- options_known: ${input.numOptions} options in ${input.knownLanguage}: 1 correct translation + ${
     input.numOptions - 1
-  } distractors.
-- All options must fit grammatically and semantically in the translated sentence.
-- Only the correct answer must preserve the full meaning of the ${input.targetLanguage} sentence.
-- In the ${input.knownLanguage} translation, replace only the target word with "_____". Keep any required article, preposition, auxiliary, or classifier outside the blank.
+  } distractors. **Do not prefix options with labels** like "a)", "b)". Provide plain strings only.
+- correct_index: 0-based index of the correct option.
 
-Guidelines:
-- Use vocabulary and grammar at or below ${input.level}.
-- Sentences must be natural, concise, and grammatically correct.
-- The ${input.knownLanguage} translation must be an accurate and faithful translation of the ${input.targetLanguage} sentence, except for the replaced word "_____".
-- The entire meaning of the ${input.targetLanguage} sentence must be fully preserved in the ${input.knownLanguage} translation. No information, nuance, or contextual detail may be omitted.
-- Distractors must share the same part of speech, gender, number, and case as the correct answer.
+Constraints:
+- Use vocabulary/grammar at or below ${input.level}.
+- The ${input.knownLanguage} translation must fully preserve the meaning of the ${input.targetLanguage} sentence; only the target word is blanked.
+- Distractors share the same part of speech, gender, number, and case as the correct answer.
 - The placeholder "_____" must always be present in the ${input.knownLanguage} translation.
+- Vary the position of the correct option (not always first).
 
-Validation Rules:
-Grammatical Validation:
-- Replace each option in the ${input.targetLanguage} sentence.
-- All options must remain grammatically correct (same part of speech, gender, number, case, etc.).
-
-Semantic Validation:
-- Replace each option in the translation.
-- All must be semantically coherent in context, but only the correct option must exactly match the intended meaning of the original sentence.
-
-Example Output:
-Ich habe gestern eine Entscheidung getroffen.
-I made a _____ yesterday.
-a) decision ✅
-b) breakfast
-c) trip
-d) phone call
+Validation:
+- Grammatical: replacing any option in ${input.targetLanguage} keeps the sentence grammatical.
+- Semantic: only the correct option exactly matches the intended meaning.
 
 Return ONLY strict JSON in this exact shape:
 {"items":[
-  {"word":"...","sentence_target":"...","sentence_known_masked":"...","options_known":["a","b","c","d"],"correct_index":0}
+  {"word":"...","sentence_target":"...","sentence_known_masked":"...","options_known":["opt1","opt2","opt3","opt4"],"correct_index":0}
 ]}
 
 Generate quizzes for these words:
@@ -141,7 +123,7 @@ ${wordsList}
   }));
 }
 
-/* ------------------------ Generation (Anthropic) ------------------------ */
+/* ----------------------- Generation: Anthropic ------------------------- */
 
 async function generateAnthropic(input: GenerateInput): Promise<QuizItem[]> {
   const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY! });
@@ -155,34 +137,30 @@ Generate multiple-choice vocabulary quizzes.
 Input:
 A list of ${input.targetLanguage} words with their ${input.knownLanguage} translations (optional).
 
-Output (for each word):
-- A short, natural ${input.targetLanguage} sentence containing the target word.
-- The same sentence translated into ${input.knownLanguage}, with the target word replaced by "_____".
-- ${input.numOptions} answer options in ${input.knownLanguage}: one correct translation and ${
+Output (for each word) — JSON fields:
+- sentence_target: a short, natural ${input.targetLanguage} sentence that **contains the target word wrapped in <tgt>…</tgt>**.
+- sentence_known_masked: the same sentence translated into ${input.knownLanguage}, with **only the target word replaced** by "_____". Keep any required article, preposition, auxiliary, or classifier **outside** the blank.
+- options_known: ${input.numOptions} options in ${input.knownLanguage}: 1 correct + ${
     input.numOptions - 1
-  } distractors.
-- All options must fit grammatically and semantically in the translated sentence.
-- Only the correct answer must preserve the full meaning of the ${input.targetLanguage} sentence.
-- In the ${input.knownLanguage} translation, replace only the target word with "_____". Keep any required article, preposition, auxiliary, or classifier outside the blank.
+  } distractors. **Do not prefix options with labels** (no "a)", "b)", etc). Plain strings only.
+- correct_index: 0-based index of correct option.
 
-Guidelines:
-- Use vocabulary and grammar at or below ${input.level}.
-- Sentences must be natural, concise, and grammatically correct.
-- The ${input.knownLanguage} translation must be an accurate and faithful translation of the ${input.targetLanguage} sentence, except for the replaced word "_____".
-- The entire meaning of the ${input.targetLanguage} sentence must be fully preserved in the ${input.knownLanguage} translation. No information, nuance, or contextual detail may be omitted.
-- Distractors must share the same part of speech, gender, number, and case as the correct answer.
-- The placeholder "_____" must always be present in the ${input.knownLanguage} translation.
+Constraints:
+- Use vocabulary/grammar at or below ${input.level}.
+- Translation must fully preserve the meaning of the original; only the target word is blanked.
+- Distractors share POS/gender/number/case with the correct one.
+- "_____" must be present in the ${input.knownLanguage} translation.
+- Vary the position of the correct option.
 
-Validation Rules:
-- Grammatical & Semantic validations as above.
-
-Words:
-${input.words.map((w, i) => `${i + 1}. ${w.term}${w.translation ? ` — ${w.translation}` : ""}`).join("\n")}
+Validation rules as above.
 
 Return ONLY strict JSON in this exact shape:
 {"items":[
-  {"word":"...","sentence_target":"...","sentence_known_masked":"...","options_known":["a","b","c","d"],"correct_index":0}
+  {"word":"...","sentence_target":"...","sentence_known_masked":"...","options_known":["opt1","opt2","opt3","opt4"],"correct_index":0}
 ]}
+
+Words:
+${input.words.map((w, i) => `${i + 1}. ${w.term}${w.translation ? ` — ${w.translation}` : ""}`).join("\n")}
 `;
 
   const msg = await client.messages.create({
@@ -205,7 +183,47 @@ Return ONLY strict JSON in this exact shape:
   }));
 }
 
-/* ---------------------------- Finalization ------------------------------ */
+/* ---------------------- Post-process & Utilities ----------------------- */
+
+/** Clean options & enforce <tgt>…</tgt> tag in sentenceTarget */
+function enforceHighlightAndSanitize(it: QuizItem): QuizItem {
+  // Strip any "a)"/"b)"/"c)"/"d)" prefixes the model might add
+  const options = (it.optionsKnown || []).map(cleanOptionText);
+
+  // Ensure sentenceTarget contains the highlight tag for the target word
+  let sent = it.sentenceTarget || "";
+  if (!/<tgt>.*<\/tgt>/.test(sent)) {
+    const w = (it.word || "").trim();
+    if (w) {
+      const re = wordLikeRegex(w);
+      sent = sent.replace(re, (m) => `<tgt>${m}</tgt>`);
+    }
+  }
+
+  return {
+    ...it,
+    sentenceTarget: sent,
+    optionsKnown: options,
+  };
+}
+
+function cleanOptionText(s: string): string {
+  let v = String(s || "");
+  // remove one or multiple leading labels like "a) ", "b) ", "a) b) ", "A: ", etc.
+  v = v.replace(/^\s*(?:[a-dA-D][\)\.\:\-]\s*)+/g, "");
+  // also remove things like "a) b) c)" if present redundantly
+  v = v.replace(/^\s*(?:[a-d]\)|[a-d]\.|[a-d]\:)\s*/i, "");
+  return v.trim();
+}
+
+function wordLikeRegex(word: string): RegExp {
+  // Escape regex metachars
+  const esc = word.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  // Use Unicode letters & marks, try to respect “word-ish” boundaries
+  // We accept inflectional variants only if they include the base as a substring (still language-agnostic).
+  // Prefer whole-word match first; if none, fallback to first occurrence.
+  return new RegExp(`\\b${esc}\\b`, "iu");
+}
 
 function finalize(items: QuizItem[], n: number, doShuffle: boolean, seed?: number): QuizItem[] {
   return items.map((it, idx) => normalizeOne(it, n, doShuffle, mixSeed(seed, idx)));
@@ -255,8 +273,6 @@ function normalizeOne(it: QuizItem, n: number, doShuffle: boolean, seed?: number
   };
 }
 
-/* -------------------------------- Utils -------------------------------- */
-
 function clampIndex(i: any, len: number) {
   const ii = Number.isInteger(i) ? Number(i) : 0;
   if (len <= 0) return 0;
@@ -289,9 +305,11 @@ function mixSeed(seed: number | undefined, idx: number): number {
   return (base ^ ((idx + 1) * 0x9e3779b1)) >>> 0;
 }
 
-/* ----------------------- Difficulty Evaluation (OpenAI) ----------------- */
+/* -------------------- Difficulty Evaluation (OpenAI) ------------------- */
 
-type DiffPatch = Partial<Pick<QuizItem, "difficultyScore" | "difficultyLabel" | "difficultyReason">>;
+type DiffPatch = Partial<
+  Pick<QuizItem, "difficultyScore" | "difficultyLabel" | "difficultyReason">
+>;
 
 function asDifficultyLabel(x: any): DifficultyLabel | undefined {
   const v = String(x ?? "");
@@ -302,7 +320,6 @@ async function evaluateDifficultyOpenAI(items: QuizItem[], input: GenerateInput)
   const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY! });
   const sys = "You are an educational content evaluator. Return valid JSON only.";
 
-  // Compact payload for the rubric
   const payload = {
     target_language: input.targetLanguage,
     known_language: input.knownLanguage,
@@ -325,9 +342,9 @@ async function evaluateDifficultyOpenAI(items: QuizItem[], input: GenerateInput)
   };
 
   const user = `
-Task: For each quiz, assign difficulty_score (0..10) and difficulty_label (Easy|Moderate|Hard) using:
+Task: For each quiz, assign difficulty_score (0..10) and difficulty_label (Easy|Moderate|Hard):
 8–10 → Easy, 5–7 → Moderate, 0–4 → Hard.
-Also include a short "reason" string.
+Also include a short "reason".
 
 Return ONLY strict JSON:
 {"items":[{"index":1,"score":8,"label":"Easy","reason":"..."}]}
@@ -365,7 +382,7 @@ ${JSON.stringify(payload)}
     if (!v) return {};
     const patch: DiffPatch = {};
     if (typeof v.score === "number") patch.difficultyScore = v.score;
-    if (v.label) patch.difficultyLabel = v.label; // typed union
+    if (v.label) patch.difficultyLabel = v.label;
     if (v.reason) patch.difficultyReason = v.reason;
     return patch;
   });

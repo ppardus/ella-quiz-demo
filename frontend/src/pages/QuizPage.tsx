@@ -330,6 +330,14 @@ export default function QuizPage() {
   if (errMsg && !quiz) return <div className="text-red-600">{errMsg}</div>;
   if (!quiz) return null;
 
+  const sentHtml =
+    String(quiz.sentence_target || "")
+      .replaceAll("<tgt>", '<mark class="tgt">')
+      .replaceAll("</tgt>", "</mark>");
+
+  const cleanOpt = (s: string) => s.replace(/^\s*(?:[a-dA-D][\)\.\:\-]\s*)+/g, "").trim();
+
+
   const handleCopy = async () => {
     try {
       await navigator.clipboard.writeText(quiz.quiz_set_id);
@@ -391,13 +399,15 @@ export default function QuizPage() {
       </div>
 
       <h2
-        className="text-xl font-semibold mb-2 leading-snug"
-        dangerouslySetInnerHTML={{ __html: htmlTitle }}
+        className="text-xl font-semibold mb-2 leading-relaxed"
+        dangerouslySetInnerHTML={{ __html: sentHtml }}
       />
       <p className="text-gray-600 mb-6">{quiz.sentence_known_masked}</p>
 
       <div className="grid grid-cols-1 gap-3">
         {quiz.options_known.map((opt: string, idx: number) => {
+          const label = cleanOpt(opt); // 2) clean labels defensively
+
           const isPicked = picked === idx;
           const isCorrect = correctIndex !== null && idx === correctIndex;
           const isWrongPick = correctIndex !== null && isPicked && !isCorrect;
@@ -405,26 +415,15 @@ export default function QuizPage() {
           const cls = [
             "w-full text-left px-4 py-3 rounded-lg border transition",
             "disabled:opacity-60",
-            isCorrect
-              ? "bg-green-50 border-green-400"
-              : isWrongPick
-              ? "bg-red-50 border-red-400"
-              : isPicked
-              ? "bg-indigo-50 border-indigo-400"
-              : "hover:bg-gray-50",
+            isCorrect ? "bg-green-50 border-green-400" :
+            isWrongPick ? "bg-red-50 border-red-400" :
+            isPicked ? "bg-indigo-50 border-indigo-400" :
+            "hover:bg-gray-50"
           ].join(" ");
 
           return (
-            <button
-              key={idx}
-              className={cls}
-              disabled={choicesDisabled && !isPicked}
-              onClick={() => choose(idx)}
-            >
-              <span className="font-mono mr-2">
-                {String.fromCharCode(97 + idx)})
-              </span>{" "}
-              {opt}
+            <button key={idx} className={cls} disabled={choicesDisabled && !isPicked} onClick={()=>choose(idx)}>
+              <span className="font-mono mr-2">{String.fromCharCode(97+idx)})</span> {label}
             </button>
           );
         })}

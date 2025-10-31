@@ -10,4 +10,10 @@ mark.tw-highlight {
     border-radius: .25rem;
     box-decoration-break: clone; /* better wrapping across lines */
     -webkit-box-decoration-break: clone;
-  }
+}
+
+mark.tgt {
+    background: #fef08a; /* Tailwind's yellow-200-ish */
+    padding: 0 .2em;
+    border-radius: .2em;
+}
