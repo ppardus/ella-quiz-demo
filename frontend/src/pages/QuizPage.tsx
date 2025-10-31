@@ -46,17 +46,6 @@ function ensureAttemptInUrl(
   return token;
 }
 
-/* ------------------------ generic highlight helpers --------------------- */
-
-function escapeHtml(s: string) {
-  return s
-    .replaceAll(/&/g, "&amp;")
-    .replaceAll(/</g, "&lt;")
-    .replaceAll(/>/g, "&gt;")
-    .replaceAll(/"/g, "&quot;")
-    .replaceAll(/'/g, "&#39;");
-}
-
 /* ------------------------------- component ------------------------------ */
 
 export default function QuizPage() {
