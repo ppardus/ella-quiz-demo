@@ -67,40 +67,6 @@ function highlightBySpan(sentence: string, span?: [number, number] | null) {
   return `${before}<mark class="tw-highlight">${mid}</mark>${after}`;
 }
 
-/** Unicode-aware, language-agnostic fallback using Intl.Segmenter if available. */
-function highlightGeneric(sentence: string, target: string) {
-  if (!sentence || !target) return escapeHtml(sentence);
-
-  const s = sentence.normalize("NFC");
-  const t = target.normalize("NFC").trim();
-  if (!t) return escapeHtml(sentence);
-
-  // simple case-insensitive search first
-  const ix = s.toLocaleLowerCase().indexOf(t.toLocaleLowerCase());
-  if (ix >= 0) {
-    const html = highlightBySpan(s, [ix, ix + t.length]);
-    return html || escapeHtml(sentence);
-  }
-
-  // try to match whole-word via segmenter (best-effort)
-  const AnySeg: any = (Intl as any).Segmenter;
-  if (typeof AnySeg === "function") {
-    const seg = new AnySeg(undefined, { granularity: "word" });
-    // @ts-ignore – TS doesn’t know segment() iterable type
-    for (const piece of seg.segment(s)) {
-      if (!piece?.isWordLike) continue;
-      const segText = String(piece.segment || "");
-      if (segText && segText.toLocaleLowerCase() === t.toLocaleLowerCase()) {
-        const start = Number(piece.index || 0);
-        const end = start + segText.length;
-        const html = highlightBySpan(s, [start, end]);
-        return html || escapeHtml(sentence);
-      }
-    }
-  }
-
-  return escapeHtml(sentence);
-}
 
 /* ------------------------------- component ------------------------------ */
 
