@@ -291,6 +291,9 @@ export default function QuizPage() {
       setErrMsg("Could not load the next question.");
     }
   }
+  function isAlpha(ch: string) {
+    return /[a-záéíóúüñ]/i.test(ch); // original text may still have diacritics
+  }
   function norm(s: string) {
     return s
       .normalize("NFD")
@@ -323,54 +326,100 @@ export default function QuizPage() {
   /** Highlight `target` in `sentence` with a soft bg; Unicode-safe boundaries. */
   function highlightTarget(sentence: string, target: string) {
     if (!sentence || !target) return escapeHtml(sentence);
-
-    // Work in normalized space to find the match
+  
     const { n: nSentence, idxMap } = buildNormMap(sentence);
     const nTarget = norm(target).replace(/\s+/g, " ").trim();
-    if (!nTarget) return escapeHtml(sentence);
-
-    // Try to find a contiguous match of the whole phrase
-    // Example: "darse cuenta" will search as a single phrase ignoring accent/case.
-    let start = -1;
-    // Prefer matching on word boundaries if possible
-    const boundaryPattern = new RegExp(`\\b${escapeRegex(nTarget)}\\b`);
-    const m = boundaryPattern.exec(nSentence);
-    if (m) {
-      start = m.index;
-    } else {
-      // fallback: plain indexOf in normalized text
-      start = nSentence.indexOf(nTarget);
+  
+    // 1) Multi-word token-first search (prefer longest token).
+    const tokens = nTarget.split(" ").filter(Boolean).sort((a, b) => b.length - a.length);
+    for (const tok of tokens) {
+      // Skip reflexive clitics for better matches (e.g., “se”, “me”, “te”, “nos”, “os”)
+      if (["se", "me", "te", "nos", "os"].includes(tok)) continue;
+  
+      const re = new RegExp(`\\b${escapeRegex(tok)}\\b`);
+      const m = re.exec(nSentence) || { index: -1 };
+      const ix = m.index >= 0 ? m.index : nSentence.indexOf(tok);
+      if (ix >= 0) {
+        // Highlight just this token
+        const [startOrig, endOrig] = expandToWord(sentence, nSentence, idxMap, ix);
+        return wrapOriginal(sentence, startOrig, endOrig);
+      }
     }
-    if (start < 0) {
-      // As a last resort, try to highlight the first token if multi-word
-      const firstToken = nTarget.split(" ")[0] || "";
-      if (!firstToken) return escapeHtml(sentence);
-      const bAlt = new RegExp(`\\b${escapeRegex(firstToken)}\\b`);
-      const m2 = bAlt.exec(nSentence) || { index: nSentence.indexOf(firstToken) };
-      if (!m2 || m2.index < 0) return escapeHtml(sentence);
-      start = m2.index;
-      // set length to first token only
-      const length = firstToken.length;
-      const s0 = idxMap[start];
-      const e0 = idxMap[start + length - 1] + 1;
-      return wrapOriginal(sentence, s0, e0);
+  
+    // 2) Infinitive stem match (e.g., esperar -> espero/esperaba/esperé …).
+    const stem = spanishStem(target);
+    if (stem && stem.length >= 3) {
+      // Find any word that STARTS with the stem
+      const reStem = new RegExp(`\\b${escapeRegex(stem)}[a-zñáéíóúü]*`);
+      const m = reStem.exec(nSentence);
+      if (m && typeof m.index === "number") {
+        const [startOrig, endOrig] = expandToWord(sentence, nSentence, idxMap, m.index);
+        return wrapOriginal(sentence, startOrig, endOrig);
+      }
     }
-
-    const length = nTarget.length;
-    // Map normalized indices back to original indices
-    const startOrig = idxMap[start];
-    const endOrig = idxMap[start + length - 1] + 1; // end-exclusive
-
-    return wrapOriginal(sentence, startOrig, endOrig);
+  
+    // 3a) Try full-phrase boundary match (rarely hits when inflected)
+    const rePhrase = new RegExp(`\\b${escapeRegex(nTarget)}\\b`);
+    const mPhrase = rePhrase.exec(nSentence);
+    if (mPhrase && typeof mPhrase.index === "number") {
+      const start = mPhrase.index;
+      const end = start + nTarget.length;
+      const startOrig = idxMap[start];
+      const endOrig = idxMap[end - 1] + 1;
+      return wrapOriginal(sentence, startOrig, endOrig);
+    }
+  
+    // 3b) Plain substring fallback: highlight first token from target if it appears as a substring.
+    const firstTok = tokens[tokens.length - 1] || nTarget;
+    const ix = nSentence.indexOf(firstTok);
+    if (ix >= 0) {
+      const [startOrig, endOrig] = expandToWord(sentence, nSentence, idxMap, ix);
+      return wrapOriginal(sentence, startOrig, endOrig);
+    }
+  
+    // Nothing found → return escaped original
+    return escapeHtml(sentence);
   }
   function escapeRegex(s: string) {
     return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  }
+  function expandToWord(original: string, normText: string, idxMap: number[], normStart: number) {
+    // Walk left/right in the normalized text to cover the whole word characters.
+    let left = normStart;
+    let right = normStart;
+    const len = normText.length;
+  
+    // expand left
+    while (left > 0) {
+      const origIdx = idxMap[left - 1];
+      const ch = original[origIdx];
+      if (!isAlpha(ch)) break;
+      left--;
+    }
+    // expand right
+    while (right < len - 1) {
+      const origIdx = idxMap[right + 1];
+      const ch = original[origIdx];
+      if (!isAlpha(ch)) break;
+      right++;
+    }
+  
+    const startOrig = idxMap[left];
+    const endOrig = idxMap[right] + 1;
+    return [startOrig, endOrig] as const;
   }
   function wrapOriginal(original: string, start: number, end: number) {
     const before = escapeHtml(original.slice(0, start));
     const mid = escapeHtml(original.slice(start, end));
     const after = escapeHtml(original.slice(end));
     return `${before}<mark class="tw-highlight">${mid}</mark>${after}`;
+  }
+  function spanishStem(infinitive: string): string | null {
+    const nInf = norm(infinitive);
+    if (/\w+(ar|er|ir)$/.test(nInf)) {
+      return nInf.replace(/(ar|er|ir)$/, "");
+    }
+    return null;
   }
   // If we’re in the “bare link” normalization we’ll navigate away quickly; until then show loader.
   if (!setId && loading) return <div className="text-gray-600">Loading quiz…</div>;
