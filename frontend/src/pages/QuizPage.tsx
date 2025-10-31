@@ -57,17 +57,6 @@ function escapeHtml(s: string) {
     .replaceAll(/'/g, "&#39;");
 }
 
-function highlightBySpan(sentence: string, span?: [number, number] | null) {
-  if (!sentence || !span || span.length !== 2) return null;
-  const [a, b] = span;
-  if (!Number.isFinite(a) || !Number.isFinite(b) || a < 0 || b <= a || b > sentence.length) return null;
-  const before = escapeHtml(sentence.slice(0, a));
-  const mid = escapeHtml(sentence.slice(a, b));
-  const after = escapeHtml(sentence.slice(b));
-  return `${before}<mark class="tw-highlight">${mid}</mark>${after}`;
-}
-
-
 /* ------------------------------- component ------------------------------ */
 
 export default function QuizPage() {
