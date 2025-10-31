@@ -291,6 +291,27 @@ export default function QuizPage() {
       setErrMsg("Could not load the next question.");
     }
   }
+  function norm(s: string) {
+    return s
+      .normalize("NFD")
+      .replace(/[\u0300-\u036f]/g, "") // strip combining marks
+      .toLowerCase()
+      .trim();
+  }
+  function buildNormMap(original: string) {
+    let n = "";
+    const idxMap: number[] = [];
+    for (let i = 0; i < original.length; i++) {
+      const ch = original[i];
+      const nCh = ch.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+      // Most chars become 1 char, but if somehow multiple, map each back to i
+      for (let j = 0; j < nCh.length; j++) {
+        n += nCh[j];
+        idxMap.push(i);
+      }
+    }
+    return { n, idxMap };
+  }
   function escapeHtml(s: string) {
     return s
       .replace(/&/g, "&amp;")
@@ -299,29 +320,58 @@ export default function QuizPage() {
       .replace(/"/g, "&quot;")
       .replace(/'/g, "&#39;");
   }
-  function escapeRegExp(s: string) {
-    return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  }
   /** Highlight `target` in `sentence` with a soft bg; Unicode-safe boundaries. */
   function highlightTarget(sentence: string, target: string) {
-    if (!sentence || !target) return escapeHtml(sentence || "");
-    const escapedTarget = escapeRegExp(target.trim());
-    if (!escapedTarget) return escapeHtml(sentence);
+    if (!sentence || !target) return escapeHtml(sentence);
 
-    let re: RegExp;
-    try {
-      re = new RegExp(`(?<!\\p{L})(${escapedTarget})(?!\\p{L})`, "giu"); // unicode letter boundary
-    } catch {
-      re = new RegExp(`\\b(${escapedTarget})\\b`, "gi"); // fallback
+    // Work in normalized space to find the match
+    const { n: nSentence, idxMap } = buildNormMap(sentence);
+    const nTarget = norm(target).replace(/\s+/g, " ").trim();
+    if (!nTarget) return escapeHtml(sentence);
+
+    // Try to find a contiguous match of the whole phrase
+    // Example: "darse cuenta" will search as a single phrase ignoring accent/case.
+    let start = -1;
+    // Prefer matching on word boundaries if possible
+    const boundaryPattern = new RegExp(`\\b${escapeRegex(nTarget)}\\b`);
+    const m = boundaryPattern.exec(nSentence);
+    if (m) {
+      start = m.index;
+    } else {
+      // fallback: plain indexOf in normalized text
+      start = nSentence.indexOf(nTarget);
+    }
+    if (start < 0) {
+      // As a last resort, try to highlight the first token if multi-word
+      const firstToken = nTarget.split(" ")[0] || "";
+      if (!firstToken) return escapeHtml(sentence);
+      const bAlt = new RegExp(`\\b${escapeRegex(firstToken)}\\b`);
+      const m2 = bAlt.exec(nSentence) || { index: nSentence.indexOf(firstToken) };
+      if (!m2 || m2.index < 0) return escapeHtml(sentence);
+      start = m2.index;
+      // set length to first token only
+      const length = firstToken.length;
+      const s0 = idxMap[start];
+      const e0 = idxMap[start + length - 1] + 1;
+      return wrapOriginal(sentence, s0, e0);
     }
 
-    const safe = escapeHtml(sentence);
-    return safe.replace(
-      re,
-      '<span class="bg-yellow-100 rounded px-1">$1</span>'
-    );
-  }
+    const length = nTarget.length;
+    // Map normalized indices back to original indices
+    const startOrig = idxMap[start];
+    const endOrig = idxMap[start + length - 1] + 1; // end-exclusive
 
+    return wrapOriginal(sentence, startOrig, endOrig);
+  }
+  function escapeRegex(s: string) {
+    return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  }
+  function wrapOriginal(original: string, start: number, end: number) {
+    const before = escapeHtml(original.slice(0, start));
+    const mid = escapeHtml(original.slice(start, end));
+    const after = escapeHtml(original.slice(end));
+    return `${before}<mark class="tw-highlight">${mid}</mark>${after}`;
+  }
   // If we’re in the “bare link” normalization we’ll navigate away quickly; until then show loader.
   if (!setId && loading) return <div className="text-gray-600">Loading quiz…</div>;
 
@@ -363,7 +413,7 @@ export default function QuizPage() {
         </div>
       </div>
       <h2
-        className="text-xl font-semibold mb-2"
+        className="text-xl font-semibold mb-2 leading-snug"
         dangerouslySetInnerHTML={{ __html: highlightTarget(quiz.sentence_target, quiz.word) }}
       />
       <p className="text-gray-600 mb-6">{quiz.sentence_known_masked}</p>

@@ -4,3 +4,10 @@
 
 :root { color-scheme: light; }
 body { @apply bg-background; }
+mark.tw-highlight {
+    background: #fff3b0; /* warm yellow */
+    padding: 0 .15em;
+    border-radius: .25rem;
+    box-decoration-break: clone; /* better wrapping across lines */
+    -webkit-box-decoration-break: clone;
+  }
