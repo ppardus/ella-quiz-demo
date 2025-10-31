@@ -347,9 +347,6 @@ export default function QuizPage() {
   };
 
   // Build highlighted sentence: prefer span from API; otherwise generic fallback.
-  const htmlTitle =
-    highlightBySpan(quiz.sentence_target, quiz.surface_span as [number, number] | null) ??
-    highlightGeneric(quiz.sentence_target, quiz.word);
 
   return (
     <div className="bg-white shadow-xl rounded-2xl p-6">
