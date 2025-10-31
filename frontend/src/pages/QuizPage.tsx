@@ -3,14 +3,15 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import {
   getQuiz,
-  listQuizzes,
   nextUnanswered,
   continueAttempt,
   answerQuiz,
 } from "../lib/api";
+import { Copy } from "lucide-react";
 import ProgressBar from "../components/ProgressBar";
+import Badge from "../components/Badge";
 
-// --- helpers --------------------------------------------------------------
+/* --------------------------- attempt helpers ---------------------------- */
 
 function makeAttemptToken() {
   return (
@@ -18,16 +19,20 @@ function makeAttemptToken() {
     Math.random().toString(36).slice(2, 10)
   );
 }
-function attemptKey(setId: string) { return `ella_attempt_${setId}`; }
-function totalKey(setId: string) { return `ella_total_${setId}`; }
+function attemptKey(setId: string) {
+  return `ella_attempt_${setId}`;
+}
+function totalKey(setId: string) {
+  return `ella_total_${setId}`;
+}
 
-/** Ensure URL has stable attempt; reuse stored or create. Only when setId exists. */
+/** Ensure URL has a stable attempt; reuse stored or create. */
 function ensureAttemptInUrl(
   sp: URLSearchParams,
   setSp: (s: URLSearchParams, o?: { replace?: boolean }) => void,
   setId: string
 ): string | null {
-  if (!setId) return null; // bare-link flow; we will derive setId first, then attach attempt
+  if (!setId) return ""; // legacy path without sets
   const urlAttempt = sp.get("attempt") || "";
   const stored = localStorage.getItem(attemptKey(setId)) || "";
   const token = urlAttempt || stored || makeAttemptToken();
@@ -36,12 +41,68 @@ function ensureAttemptInUrl(
     const next = new URLSearchParams(sp);
     next.set("attempt", token);
     setSp(next, { replace: true });
-    return null; // wait for URL update
+    return null; // will re-run after URL updates
   }
   return token;
 }
 
-// --- component ------------------------------------------------------------
+/* ------------------------ generic highlight helpers --------------------- */
+
+function escapeHtml(s: string) {
+  return s
+    .replaceAll(/&/g, "&amp;")
+    .replaceAll(/</g, "&lt;")
+    .replaceAll(/>/g, "&gt;")
+    .replaceAll(/"/g, "&quot;")
+    .replaceAll(/'/g, "&#39;");
+}
+
+function highlightBySpan(sentence: string, span?: [number, number] | null) {
+  if (!sentence || !span || span.length !== 2) return null;
+  const [a, b] = span;
+  if (!Number.isFinite(a) || !Number.isFinite(b) || a < 0 || b <= a || b > sentence.length) return null;
+  const before = escapeHtml(sentence.slice(0, a));
+  const mid = escapeHtml(sentence.slice(a, b));
+  const after = escapeHtml(sentence.slice(b));
+  return `${before}<mark class="tw-highlight">${mid}</mark>${after}`;
+}
+
+/** Unicode-aware, language-agnostic fallback using Intl.Segmenter if available. */
+function highlightGeneric(sentence: string, target: string) {
+  if (!sentence || !target) return escapeHtml(sentence);
+
+  const s = sentence.normalize("NFC");
+  const t = target.normalize("NFC").trim();
+  if (!t) return escapeHtml(sentence);
+
+  // simple case-insensitive search first
+  const ix = s.toLocaleLowerCase().indexOf(t.toLocaleLowerCase());
+  if (ix >= 0) {
+    const html = highlightBySpan(s, [ix, ix + t.length]);
+    return html || escapeHtml(sentence);
+  }
+
+  // try to match whole-word via segmenter (best-effort)
+  const AnySeg: any = (Intl as any).Segmenter;
+  if (typeof AnySeg === "function") {
+    const seg = new AnySeg(undefined, { granularity: "word" });
+    // @ts-ignore – TS doesn’t know segment() iterable type
+    for (const piece of seg.segment(s)) {
+      if (!piece?.isWordLike) continue;
+      const segText = String(piece.segment || "");
+      if (segText && segText.toLocaleLowerCase() === t.toLocaleLowerCase()) {
+        const start = Number(piece.index || 0);
+        const end = start + segText.length;
+        const html = highlightBySpan(s, [start, end]);
+        return html || escapeHtml(sentence);
+      }
+    }
+  }
+
+  return escapeHtml(sentence);
+}
+
+/* ------------------------------- component ------------------------------ */
 
 export default function QuizPage() {
   const { quizId } = useParams();
@@ -50,7 +111,7 @@ export default function QuizPage() {
 
   const setId = sp.get("set") ?? "";
 
-  // resolve attempt in URL only when setId is present
+  // resolve attempt in URL before boot
   const [attempt, setAttempt] = useState<string | null>(() =>
     ensureAttemptInUrl(sp, setSp, setId)
   );
@@ -82,100 +143,50 @@ export default function QuizPage() {
   });
 
   const startMs = useRef<number>(Date.now());
+  const [copied, setCopied] = useState(false);
 
+  // Boot only after attempt is present in URL
   useEffect(() => {
+    if (attempt === null) return;
     let mounted = true;
 
-    async function bootBareLink() {
-      // No set param: discover set, mint attempt, and jump to first-unanswered.
-      const qd = await getQuiz(quizId!); // must include quiz_set_id, index, total
-      if (!mounted) return;
+    async function normalizeToFirstUnanswered() {
+      if (!setId || !attempt) return { ok: true };
 
-      const discoveredSetId: string = qd.quiz_set_id;
-      const stored = localStorage.getItem(attemptKey(discoveredSetId)) || "";
-      const token = stored || makeAttemptToken();
-      if (!stored) localStorage.setItem(attemptKey(discoveredSetId), token);
-
-      const na = await nextUnanswered(discoveredSetId, token);
-      if (!mounted) return;
-
-      const tot = Number(na?.total) || Number(qd.total) || 1;
-
-      if (na?.status === "completed") {
-        nav(`/summary/${discoveredSetId}?attempt=${encodeURIComponent(token)}`, { replace: true });
-        return;
-      }
-
-      const firstId = na?.question?.quiz_id || qd.quiz_id;
-      const firstIdx = na?.question?.index || Number(qd.index) || 1;
-
-      nav(
-        `/quiz/${firstId}?set=${discoveredSetId}&i=${firstIdx}&t=${tot}&attempt=${encodeURIComponent(token)}`,
-        { replace: true }
-      );
-    }
-
-    async function bootWithSet() {
-      // With set in URL: ensure/attach attempt, normalize to first-unanswered, load quiz.
-      const tok = attempt ?? sp.get("attempt") ?? localStorage.getItem(attemptKey(setId)) ?? makeAttemptToken();
-      if (!attempt) {
-        const next = new URLSearchParams(sp);
-        next.set("attempt", tok);
-        setSp(next, { replace: true });
-        setAttempt(tok);
-        localStorage.setItem(attemptKey(setId), tok);
-        return; // will re-run effect once attempt is in URL
-      }
-
-      // First-unanswered normalization
       const data = await nextUnanswered(setId, attempt);
-      if (!mounted) return;
-
-      if (Number(data?.total) > 0) {
-        setTotal(data.total);
-        localStorage.setItem(totalKey(setId), String(data.total));
+      const totalN = Number(data?.total) || 0;
+      if (totalN > 0) {
+        setTotal(totalN);
+        localStorage.setItem(totalKey(setId), String(totalN));
       }
-
       if (data?.status === "completed") {
         nav(`/summary/${setId}?attempt=${encodeURIComponent(attempt)}`, { replace: true });
-        return;
+        return { ok: false };
       }
-
       const nextId = data?.question?.quiz_id;
-      const nextIndex = data?.question?.index;
-      if (nextId && nextIndex && nextId !== quizId) {
-        nav(
-          `/quiz/${nextId}?set=${setId}&i=${nextIndex}&t=${data.total}&attempt=${encodeURIComponent(attempt)}`,
-          { replace: true }
-        );
-        return;
+      const nextIdx = data?.question?.index;
+      if (nextId && nextIdx) {
+        if (nextId !== quizId) {
+          nav(
+            `/quiz/${nextId}?set=${setId}&i=${nextIdx}&t=${totalN || data.total}&attempt=${encodeURIComponent(attempt)}`,
+            { replace: true }
+          );
+          return { ok: false };
+        } else {
+          // already at first unanswered; refresh URL's i/t if stale
+          const iUrl = Number(sp.get("i") || "0");
+          const tUrl = Number(sp.get("t") || "0");
+          if (iUrl !== nextIdx || tUrl !== totalN) {
+            const nextSp = new URLSearchParams(sp);
+            nextSp.set("i", String(nextIdx));
+            if (totalN) nextSp.set("t", String(totalN));
+            setSp(nextSp, { replace: true });
+          }
+          setCurrentIndex(nextIdx);
+          if (totalN) setTotal(totalN);
+        }
       }
-
-      // Load current quiz & sync i/t
-      const d = await getQuiz(quizId!);
-      if (!mounted) return;
-      setQuiz(d);
-
-      if (typeof d.index === "number") setCurrentIndex(d.index);
-      if (typeof d.total === "number" && d.total > 0) {
-        setTotal(d.total);
-        localStorage.setItem(totalKey(setId), String(d.total));
-      }
-
-      const iUrl = Number(sp.get("i") || "0");
-      const tUrl = Number(sp.get("t") || "0");
-      const needRewrite =
-        (typeof d.index === "number" && d.index !== iUrl) ||
-        (typeof d.total === "number" && d.total !== tUrl);
-      if (needRewrite) {
-        const nextSp = new URLSearchParams(sp);
-        if (typeof d.index === "number") nextSp.set("i", String(d.index));
-        if (typeof d.total === "number") nextSp.set("t", String(d.total));
-        setSp(nextSp, { replace: true });
-      }
-
-      // (optional) warm cache
-      listQuizzes(setId).catch(() => {});
+      return { ok: true };
     }
 
     async function boot() {
@@ -183,20 +194,38 @@ export default function QuizPage() {
       setErrMsg(null);
 
       try {
-        if (!setId) {
-          await bootBareLink();
-          return;
-        } else {
-          await bootWithSet();
+        const step = await normalizeToFirstUnanswered();
+        if (!step.ok) return;
+
+        const d = await getQuiz(quizId!);
+        if (!mounted) return;
+        setQuiz(d);
+
+        // normalize URL/locals using server index/total if available
+        if (typeof d.index === "number") setCurrentIndex(d.index);
+        if (typeof d.total === "number" && d.total > 0) {
+          setTotal(d.total);
+          localStorage.setItem(totalKey(setId), String(d.total));
+        }
+        const iUrl = Number(sp.get("i") || "0");
+        const tUrl = Number(sp.get("t") || "0");
+        const needRewrite =
+          (typeof d.index === "number" && d.index !== iUrl) ||
+          (typeof d.total === "number" && d.total !== tUrl);
+        if (needRewrite) {
+          const nextSp = new URLSearchParams(sp);
+          if (typeof d.index === "number") nextSp.set("i", String(d.index));
+          if (typeof d.total === "number") nextSp.set("t", String(d.total));
+          setSp(nextSp, { replace: true });
         }
       } catch (e: any) {
         console.error("Boot failed", e);
         setErrMsg("Could not reach the quiz server or load this quiz.");
       } finally {
-        if (mounted) setLoading(false);
+        setLoading(false);
       }
 
-      // Per-question UI reset
+      // reset per-question UI state
       startMs.current = Date.now();
       setChoicesDisabled(false);
       setPicked(null);
@@ -204,20 +233,22 @@ export default function QuizPage() {
     }
 
     boot();
-    return () => { mounted = false; };
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [quizId, setId, attempt, nav, sp, setSp]);
+    return () => {
+      mounted = false;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [quizId, setId, attempt]);
 
   const pct = useMemo(() => Math.max(1, currentIndex), [currentIndex]);
 
   async function choose(idx: number) {
-    if (choicesDisabled || correctIndex !== null || !attempt || !setId) return;
+    if (choicesDisabled || correctIndex !== null || !attempt) return;
     setPicked(idx);
     setChoicesDisabled(true);
     const elapsed = Date.now() - startMs.current;
 
     try {
-      localStorage.setItem(attemptKey(setId), attempt);
+      if (setId) localStorage.setItem(attemptKey(setId), attempt);
       const data = await answerQuiz(quizId!, {
         choice_index: idx,
         time_ms: elapsed,
@@ -233,12 +264,12 @@ export default function QuizPage() {
   }
 
   async function skip() {
-    if (choicesDisabled || correctIndex !== null || !attempt || !setId) return;
+    if (choicesDisabled || correctIndex !== null || !attempt) return;
     setChoicesDisabled(true);
     const elapsed = Date.now() - startMs.current;
 
     try {
-      localStorage.setItem(attemptKey(setId), attempt);
+      if (setId) localStorage.setItem(attemptKey(setId), attempt);
       await answerQuiz(quizId!, { action: "skipped", time_ms: elapsed, attempt });
     } catch (e: any) {
       console.error("Skip failed", e);
@@ -250,15 +281,16 @@ export default function QuizPage() {
     // Immediately advance using server’s first-unanswered
     try {
       const data = await continueAttempt(setId, attempt);
-      if (Number(data?.total) > 0) {
-        setTotal(data.total);
-        localStorage.setItem(totalKey(setId), String(data.total));
+      const totalN = Number(data?.total) || total;
+      if (totalN > 0) {
+        setTotal(totalN);
+        localStorage.setItem(totalKey(setId), String(totalN));
       }
       if (data.status === "completed") {
         nav(`/summary/${setId}?attempt=${encodeURIComponent(attempt)}`);
       } else {
         nav(
-          `/quiz/${data.next_quiz_id}?set=${setId}&i=${data.index}&t=${data.total}&attempt=${encodeURIComponent(attempt)}`
+          `/quiz/${data.next_quiz_id}?set=${setId}&i=${data.index}&t=${totalN}&attempt=${encodeURIComponent(attempt)}`
         );
       }
     } catch (e: any) {
@@ -275,15 +307,16 @@ export default function QuizPage() {
     }
     try {
       const data = await continueAttempt(setId, attempt);
-      if (Number(data?.total) > 0) {
-        setTotal(data.total);
-        localStorage.setItem(totalKey(setId), String(data.total));
+      const totalN = Number(data?.total) || total;
+      if (totalN > 0) {
+        setTotal(totalN);
+        localStorage.setItem(totalKey(setId), String(totalN));
       }
       if (data.status === "completed") {
         nav(`/summary/${setId}?attempt=${encodeURIComponent(attempt)}`);
       } else {
         nav(
-          `/quiz/${data.next_quiz_id}?set=${setId}&i=${data.index}&t=${data.total}&attempt=${encodeURIComponent(attempt)}`
+          `/quiz/${data.next_quiz_id}?set=${setId}&i=${data.index}&t=${totalN}&attempt=${encodeURIComponent(attempt)}`
         );
       }
     } catch (e: any) {
@@ -291,160 +324,51 @@ export default function QuizPage() {
       setErrMsg("Could not load the next question.");
     }
   }
-  function isAlpha(ch: string) {
-    return /[a-záéíóúüñ]/i.test(ch); // original text may still have diacritics
-  }
-  function norm(s: string) {
-    return s
-      .normalize("NFD")
-      .replace(/[\u0300-\u036f]/g, "") // strip combining marks
-      .toLowerCase()
-      .trim();
-  }
-  function buildNormMap(original: string) {
-    let n = "";
-    const idxMap: number[] = [];
-    for (let i = 0; i < original.length; i++) {
-      const ch = original[i];
-      const nCh = ch.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
-      // Most chars become 1 char, but if somehow multiple, map each back to i
-      for (let j = 0; j < nCh.length; j++) {
-        n += nCh[j];
-        idxMap.push(i);
-      }
-    }
-    return { n, idxMap };
-  }
-  function escapeHtml(s: string) {
-    return s
-      .replace(/&/g, "&amp;")
-      .replace(/</g, "&lt;")
-      .replace(/>/g, "&gt;")
-      .replace(/"/g, "&quot;")
-      .replace(/'/g, "&#39;");
-  }
-  /** Highlight `target` in `sentence` with a soft bg; Unicode-safe boundaries. */
-  function highlightTarget(sentence: string, target: string) {
-    if (!sentence || !target) return escapeHtml(sentence);
-  
-    const { n: nSentence, idxMap } = buildNormMap(sentence);
-    const nTarget = norm(target).replace(/\s+/g, " ").trim();
-  
-    // 1) Multi-word token-first search (prefer longest token).
-    const tokens = nTarget.split(" ").filter(Boolean).sort((a, b) => b.length - a.length);
-    for (const tok of tokens) {
-      // Skip reflexive clitics for better matches (e.g., “se”, “me”, “te”, “nos”, “os”)
-      if (["se", "me", "te", "nos", "os"].includes(tok)) continue;
-  
-      const re = new RegExp(`\\b${escapeRegex(tok)}\\b`);
-      const m = re.exec(nSentence) || { index: -1 };
-      const ix = m.index >= 0 ? m.index : nSentence.indexOf(tok);
-      if (ix >= 0) {
-        // Highlight just this token
-        const [startOrig, endOrig] = expandToWord(sentence, nSentence, idxMap, ix);
-        return wrapOriginal(sentence, startOrig, endOrig);
-      }
-    }
-  
-    // 2) Infinitive stem match (e.g., esperar -> espero/esperaba/esperé …).
-    const stem = spanishStem(target);
-    if (stem && stem.length >= 3) {
-      // Find any word that STARTS with the stem
-      const reStem = new RegExp(`\\b${escapeRegex(stem)}[a-zñáéíóúü]*`);
-      const m = reStem.exec(nSentence);
-      if (m && typeof m.index === "number") {
-        const [startOrig, endOrig] = expandToWord(sentence, nSentence, idxMap, m.index);
-        return wrapOriginal(sentence, startOrig, endOrig);
-      }
-    }
-  
-    // 3a) Try full-phrase boundary match (rarely hits when inflected)
-    const rePhrase = new RegExp(`\\b${escapeRegex(nTarget)}\\b`);
-    const mPhrase = rePhrase.exec(nSentence);
-    if (mPhrase && typeof mPhrase.index === "number") {
-      const start = mPhrase.index;
-      const end = start + nTarget.length;
-      const startOrig = idxMap[start];
-      const endOrig = idxMap[end - 1] + 1;
-      return wrapOriginal(sentence, startOrig, endOrig);
-    }
-  
-    // 3b) Plain substring fallback: highlight first token from target if it appears as a substring.
-    const firstTok = tokens[tokens.length - 1] || nTarget;
-    const ix = nSentence.indexOf(firstTok);
-    if (ix >= 0) {
-      const [startOrig, endOrig] = expandToWord(sentence, nSentence, idxMap, ix);
-      return wrapOriginal(sentence, startOrig, endOrig);
-    }
-  
-    // Nothing found → return escaped original
-    return escapeHtml(sentence);
-  }
-  function escapeRegex(s: string) {
-    return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  }
-  function expandToWord(original: string, normText: string, idxMap: number[], normStart: number) {
-    // Walk left/right in the normalized text to cover the whole word characters.
-    let left = normStart;
-    let right = normStart;
-    const len = normText.length;
-  
-    // expand left
-    while (left > 0) {
-      const origIdx = idxMap[left - 1];
-      const ch = original[origIdx];
-      if (!isAlpha(ch)) break;
-      left--;
-    }
-    // expand right
-    while (right < len - 1) {
-      const origIdx = idxMap[right + 1];
-      const ch = original[origIdx];
-      if (!isAlpha(ch)) break;
-      right++;
-    }
-  
-    const startOrig = idxMap[left];
-    const endOrig = idxMap[right] + 1;
-    return [startOrig, endOrig] as const;
-  }
-  function wrapOriginal(original: string, start: number, end: number) {
-    const before = escapeHtml(original.slice(0, start));
-    const mid = escapeHtml(original.slice(start, end));
-    const after = escapeHtml(original.slice(end));
-    return `${before}<mark class="tw-highlight">${mid}</mark>${after}`;
-  }
-  function spanishStem(infinitive: string): string | null {
-    const nInf = norm(infinitive);
-    if (/\w+(ar|er|ir)$/.test(nInf)) {
-      return nInf.replace(/(ar|er|ir)$/, "");
-    }
-    return null;
-  }
-  // If we’re in the “bare link” normalization we’ll navigate away quickly; until then show loader.
-  if (!setId && loading) return <div className="text-gray-600">Loading quiz…</div>;
 
-  if (attempt === null && setId) return null;
-  if (loading && !quiz && setId) return <div className="text-gray-600">Loading quiz…</div>;
+  if (attempt === null) return null;
+  if (loading && !quiz) return <div className="text-gray-600">Loading quiz…</div>;
   if (errMsg && !quiz) return <div className="text-red-600">{errMsg}</div>;
-  if (!quiz && setId) return null;
+  if (!quiz) return null;
+
+  const handleCopy = async () => {
+    try {
+      await navigator.clipboard.writeText(quiz.quiz_set_id);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    } catch {}
+  };
+
+  // Build highlighted sentence: prefer span from API; otherwise generic fallback.
+  const htmlTitle =
+    highlightBySpan(quiz.sentence_target, quiz.surface_span as [number, number] | null) ??
+    highlightGeneric(quiz.sentence_target, quiz.word);
 
   return (
     <div className="bg-white shadow-xl rounded-2xl p-6">
       <div className="flex items-center justify-between mb-4">
         <div className="flex items-center gap-3">
-          <div className="w-28"><ProgressBar value={pct} total={total} /></div>
-          <div className="text-sm text-gray-600">{currentIndex} of {total}</div>
+          <div className="w-28">
+            <ProgressBar value={pct} total={total} />
+          </div>
+          <div className="text-sm text-gray-600">
+            {currentIndex} of {total}
+          </div>
         </div>
         <div className="flex items-center gap-1">
-          {/* <Badge>Set: <span className="font-mono">{quiz.quiz_set_id.slice(0, 8)}</span></Badge> */}
-          {/* <button onClick={handleCopy} className="text-gray-500 hover:text-indigo-600 transition ml-1" title="Copy full ID">
+          <Badge>
+            Set: <span className="font-mono">{quiz.quiz_set_id.slice(0, 8)}</span>
+          </Badge>
+          <button
+            onClick={handleCopy}
+            className="text-gray-500 hover:text-indigo-600 transition ml-1"
+            title="Copy full ID"
+          >
             <Copy size={14} />
-          </button> */}
-          {/* {copied && <span className="text-xs text-green-600 ml-1">Copied!</span>} */}
+          </button>
+          {copied && <span className="text-xs text-green-600 ml-1">Copied!</span>}
 
           {/* Difficulty tag (informational only) */}
-          {/* {quiz.difficulty_label && (
+          {quiz.difficulty_label && (
             <span
               className={
                 "ml-2 inline-block px-2 py-0.5 text-xs rounded-full border " +
@@ -454,16 +378,21 @@ export default function QuizPage() {
                   ? "bg-yellow-50 text-yellow-700 border-yellow-200"
                   : "bg-red-50 text-red-700 border-red-200")
               }
-              title={quiz.difficulty_score != null ? `Score ${quiz.difficulty_score}/10` : undefined}
+              title={
+                quiz.difficulty_score != null
+                  ? `Score ${quiz.difficulty_score}/10`
+                  : undefined
+              }
             >
               {quiz.difficulty_label}
             </span>
-          )} */}
+          )}
         </div>
       </div>
+
       <h2
         className="text-xl font-semibold mb-2 leading-snug"
-        dangerouslySetInnerHTML={{ __html: highlightTarget(quiz.sentence_target, quiz.word) }}
+        dangerouslySetInnerHTML={{ __html: htmlTitle }}
       />
       <p className="text-gray-600 mb-6">{quiz.sentence_known_masked}</p>
 
@@ -476,15 +405,26 @@ export default function QuizPage() {
           const cls = [
             "w-full text-left px-4 py-3 rounded-lg border transition",
             "disabled:opacity-60",
-            isCorrect ? "bg-green-50 border-green-400" :
-            isWrongPick ? "bg-red-50 border-red-400" :
-            isPicked ? "bg-indigo-50 border-indigo-400" :
-            "hover:bg-gray-50"
+            isCorrect
+              ? "bg-green-50 border-green-400"
+              : isWrongPick
+              ? "bg-red-50 border-red-400"
+              : isPicked
+              ? "bg-indigo-50 border-indigo-400"
+              : "hover:bg-gray-50",
           ].join(" ");
 
           return (
-            <button key={idx} className={cls} disabled={choicesDisabled && !isPicked} onClick={()=>choose(idx)}>
-              <span className="font-mono mr-2">{String.fromCharCode(97+idx)})</span> {opt}
+            <button
+              key={idx}
+              className={cls}
+              disabled={choicesDisabled && !isPicked}
+              onClick={() => choose(idx)}
+            >
+              <span className="font-mono mr-2">
+                {String.fromCharCode(97 + idx)})
+              </span>{" "}
+              {opt}
             </button>
           );
         })}
@@ -493,12 +433,18 @@ export default function QuizPage() {
       <div className="mt-6 flex items-center justify-end gap-3">
         {/* No Back button per requirements */}
         {correctIndex === null && (
-          <button onClick={skip} className="px-4 py-2 rounded-lg border text-gray-700 hover:bg-gray-50">
+          <button
+            onClick={skip}
+            className="px-4 py-2 rounded-lg border text-gray-700 hover:bg-gray-50"
+          >
             Skip
           </button>
         )}
         {correctIndex !== null && (
-          <button onClick={next} className="px-5 py-2 rounded-lg bg-indigo-600 text-white hover:bg-indigo-700">
+          <button
+            onClick={next}
+            className="px-5 py-2 rounded-lg bg-indigo-600 text-white hover:bg-indigo-700"
+          >
             {currentIndex < total ? "Next" : "Finish"}
           </button>
         )}
